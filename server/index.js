@@ -7,14 +7,12 @@ import multer from 'multer';
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
 
-// Variáveis de ambiente da integração com GitHub Releases (sem segredos fixos no código)
 const GITHUB_REPO = process.env.GITHUB_REPO || 'malexlkw-prog/livroflix';
 const GITHUB_RELEASE_TAG = process.env.GITHUB_RELEASE_TAG || 'livroflix-pdfs';
 const GITHUB_RELEASE_NAME =
   process.env.GITHUB_RELEASE_NAME || 'LIVROFLIX — Catálogo de PDFs';
-const MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024; // Limite máximo de 50 MB
+const MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024;
 
-// Configuração de CORS para permitir requisições do frontend LIVROFLIX
 const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',')
       .map((origin) => origin.trim())
@@ -31,7 +29,6 @@ app.use(
 
 app.use(express.json({ limit: '10mb' }));
 
-// Configuração do Multer usando memoryStorage, limite de 50 MB e validação de PDF
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -56,48 +53,44 @@ const upload = multer({
   },
 });
 
-/**
- * Gera um nome de arquivo seguro, sem path traversal, caracteres perigosos ou espaços problemáticos.
- * Se bookId existir, inclui o bookId como parte do nome do arquivo.
- */
-function buildSafePdfFileName(originalName, bookId) {
-  const baseNameWithoutDirs = String(originalName || 'livro.pdf')
-    .replace(/^.*[\\/]/, '') // Remove qualquer tentativa de path traversal
-    .replace(/\.pdf$/i, ''); // Remove a extensão temporariamente para sanitizar o nome base
+function sanitizeAsciiSegment(value) {
+  const asciiOnly = Array.from(String(value || '').normalize('NFD'))
+    .filter((char) => char.charCodeAt(0) <= 127)
+    .join('');
 
-  const safeBase = baseNameWithoutDirs
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // Remove acentos
-    .replace(/[^a-zA-Z0-9._-]+/g, '-') // Substitui espaços e caracteres especiais por hífen
-    .replace(/\.+/g, '.') // Evita múltiplos pontos seguidos (..)
+  return asciiOnly
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/[.]+/g, '.')
     .replace(/-+/g, '-')
     .replace(/^[-.]+|[-.]+$/g, '');
+}
 
-  const finalBase = safeBase || 'documento';
+function buildSafePdfFileName(originalName, bookId) {
+  const rawName = String(originalName || 'livro.pdf')
+    .split('/')
+    .pop()
+    .split(':')
+    .pop();
+
+  const withoutExt = rawName.toLowerCase().endsWith('.pdf')
+    ? rawName.slice(0, -4)
+    : rawName;
+
+  const safeBase = sanitizeAsciiSegment(withoutExt) || 'documento';
 
   if (bookId !== undefined && bookId !== null && String(bookId).trim() !== '') {
-    const safeBookId = String(bookId)
-      .trim()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-zA-Z0-9_-]+/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '');
-
+    const safeBookId = sanitizeAsciiSegment(bookId).replace(/[.]+/g, '-');
     if (safeBookId) {
-      if (finalBase.toLowerCase().startsWith(`${safeBookId.toLowerCase()}-`)) {
-        return `${finalBase}.pdf`;
+      if (safeBase.toLowerCase().startsWith(`${safeBookId.toLowerCase()}-`)) {
+        return `${safeBase}.pdf`;
       }
-      return `${safeBookId}-${finalBase}.pdf`;
+      return `${safeBookId}-${safeBase}.pdf`;
     }
   }
 
-  return `${finalBase}.pdf`;
+  return `${safeBase}.pdf`;
 }
 
-/**
- * Verifica a assinatura real do arquivo (magic bytes), que deve começar com %PDF-
- */
 function hasValidPdfSignature(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 5) {
     return false;
@@ -105,9 +98,6 @@ function hasValidPdfSignature(buffer) {
   return buffer.subarray(0, 5).toString('ascii') === '%PDF-';
 }
 
-/**
- * Middleware de autenticação administrativa via Authorization: Bearer <LIVROFLIX_ADMIN_API_KEY>
- */
 function requireAdminApiKey(req, res, next) {
   const configuredKey = process.env.LIVROFLIX_ADMIN_API_KEY;
 
@@ -155,9 +145,6 @@ function requireAdminApiKey(req, res, next) {
   next();
 }
 
-/**
- * Extrai uma mensagem segura de erro da resposta do GitHub sem expor tokens ou segredos
- */
 async function parseGitHubErrorMessage(response, fallbackContext) {
   try {
     const data = await response.json();
@@ -170,9 +157,6 @@ async function parseGitHubErrorMessage(response, fallbackContext) {
   return `${fallbackContext} (GitHub HTTP ${response.status}).`;
 }
 
-/**
- * Procura um Release com a tag GITHUB_RELEASE_TAG ou cria o Release caso não exista
- */
 async function getOrCreateRelease(githubToken) {
   const headers = {
     Authorization: `Bearer ${githubToken}`,
@@ -204,7 +188,6 @@ async function getOrCreateRelease(githubToken) {
     throw error;
   }
 
-  // Se não existir (404), cria a Release dedicada
   const createUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases`;
   const createResp = await fetch(createUrl, {
     method: 'POST',
@@ -234,11 +217,6 @@ async function getOrCreateRelease(githubToken) {
   return await createResp.json();
 }
 
-// ============================================================================
-// ROTAS DA API
-// ============================================================================
-
-// Rota de verificação de saúde do serviço (Health Check)
 app.get('/api/health', (_req, res) => {
   res.status(200).json({
     ok: true,
@@ -246,7 +224,6 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-// Rota protegida para receber um PDF e enviá-lo para o GitHub Releases
 app.post(
   '/api/github/upload-pdf',
   requireAdminApiKey,
@@ -271,7 +248,6 @@ app.post(
         });
       }
 
-      // Verifica a assinatura real do arquivo (%PDF-)
       if (!hasValidPdfSignature(file.buffer)) {
         return res.status(400).json({
           ok: false,
@@ -284,10 +260,8 @@ app.post(
       const safeFileName = buildSafePdfFileName(file.originalname, bookId);
       const token = githubToken.trim();
 
-      // 1. Procura ou cria a Release com a tag definida em GITHUB_RELEASE_TAG
       const release = await getOrCreateRelease(token);
 
-      // 2. Procura no Release um asset com o mesmo nome e, se existir, apaga antes de enviar o novo
       const existingAsset = Array.isArray(release.assets)
         ? release.assets.find((asset) => asset.name === safeFileName)
         : null;
@@ -316,7 +290,6 @@ app.post(
         }
       }
 
-      // 3. Envia o novo PDF para uploads.github.com
       const uploadUrl = `https://uploads.github.com/repos/${GITHUB_REPO}/releases/${
         release.id
       }/assets?name=${encodeURIComponent(safeFileName)}`;
@@ -361,7 +334,6 @@ app.post(
   }
 );
 
-// Rota não encontrada (404)
 app.use((req, res) => {
   res.status(404).json({
     ok: false,
@@ -369,7 +341,6 @@ app.use((req, res) => {
   });
 });
 
-// Middleware global de tratamento de erros
 app.use((err, _req, res, _next) => {
   console.error('[livroflix-api] Erro interno:', err.message || 'Erro desconhecido');
 
