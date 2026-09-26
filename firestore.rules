@@ -1,0 +1,136 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Global Safety Net (Default Deny)
+    // ===============================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        (request.auth.token.email.lower() == "malexlkw@gmail.com" && request.auth.token.email_verified == true) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    function isValidBookPayload(data) {
+      return data.titulo is string &&
+        data.titulo.size() > 0 &&
+        data.titulo.size() <= 300 &&
+        data.autor is string &&
+        data.autor.size() > 0 &&
+        data.autor.size() <= 200 &&
+        (!('pdfUrl' in data) || (data.pdfUrl is string && data.pdfUrl.size() <= 2048)) &&
+        (!('pdfPath' in data) || (data.pdfPath is string && data.pdfPath.size() <= 512)) &&
+        (!('pdfFileName' in data) || (data.pdfFileName is string && data.pdfFileName.size() <= 300)) &&
+        (!('pdfSize' in data) || (data.pdfSize is number && data.pdfSize >= 0));
+    }
+
+    // ===============================================================
+    // Books Catalog (/books/{bookId})
+    // Public read (logged-in and non-logged-in users); Admin full write;
+    // Authenticated users can update rating/read counters.
+    // ===============================================================
+    match /books/{bookId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidBookPayload(request.resource.data);
+      allow update: if (isAdmin() && isValidBookPayload(request.resource.data)) || (
+        isAuthenticated() &&
+        isValidBookPayload(request.resource.data) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['avaliacao', 'totalAvaliacoes', 'leiturasCount'])
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // Custom Categories (/categories/{categoryId})
+    // Public read; EXCLUSIVE Admin write
+    // ===============================================================
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // Dynamic Home Rows (/home_rows/{rowId})
+    // Public read; EXCLUSIVE Admin write
+    // ===============================================================
+    match /home_rows/{rowId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // Global Platform Settings (/settings/{settingId})
+    // Public read; EXCLUSIVE Admin write
+    // ===============================================================
+    match /settings/{settingId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // Users & Strict User Isolation (/users/{userId})
+    // Owner can manage own profile (cannot self-promote to admin);
+    // Admin can read and manage all users for LIVROFLIX ADMIN panel.
+    // ===============================================================
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+
+      allow create: if (
+        isOwner(userId) &&
+        request.resource.data.uid == userId &&
+        request.resource.data.nome is string &&
+        request.resource.data.nome.size() <= 150 &&
+        request.resource.data.role == 'user'
+      ) || isAdmin();
+
+      allow update: if (
+        isOwner(userId) &&
+        request.resource.data.uid == userId &&
+        request.resource.data.role == resource.data.role
+      ) || isAdmin();
+
+      allow delete: if isOwner(userId) || isAdmin();
+
+      // ===============================================================
+      // User Library Subcollection (/users/{userId}/library/{bookId})
+      // Strictly isolated to the owner for writes;
+      // Admin can also read/manage for user reading history in LIVROFLIX ADMIN.
+      // ===============================================================
+      match /library/{bookId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create, update: if (
+          isOwner(userId) &&
+          request.resource.data.userId == userId &&
+          request.resource.data.bookId == bookId &&
+          request.resource.data.paginaAtual is number &&
+          request.resource.data.paginaAtual >= 1 &&
+          request.resource.data.progresso is number &&
+          request.resource.data.progresso >= 0 &&
+          request.resource.data.progresso <= 100
+        ) || isAdmin();
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    // Allow Admin collectionGroup queries on 'library' for global reading metrics
+    match /{path=**}/library/{bookId} {
+      allow read: if isAdmin();
+    }
+  }
+}

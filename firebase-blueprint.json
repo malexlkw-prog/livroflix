@@ -1,0 +1,181 @@
+{
+  "entities": {
+    "Book": {
+      "title": "Book",
+      "description": "Catalog book item in LIVROFLIX",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "titulo": { "type": "string" },
+        "autor": { "type": "string" },
+        "capa": { "type": "string" },
+        "corTema": { "type": "string" },
+        "descricao": { "type": "string" },
+        "generos": { "type": "array", "items": { "type": "string" } },
+        "personagens": { "type": "array", "items": { "type": "string" } },
+        "palavrasChave": { "type": "array", "items": { "type": "string" } },
+        "ano": { "type": "number" },
+        "paginas": { "type": "number" },
+        "idioma": { "type": "string" },
+        "editora": { "type": "string" },
+        "avaliacao": { "type": "number" },
+        "totalAvaliacoes": { "type": "number" },
+        "recomendacoesPositivas": { "type": "number" },
+        "leiturasCount": { "type": "number" },
+        "arquivo": { "type": "string" },
+        "pdfUrl": { "type": "string" },
+        "pdfPath": { "type": "string" },
+        "pdfFileName": { "type": "string" },
+        "pdfSize": { "type": "number" },
+        "pdfUpdatedAt": { "type": "string" },
+        "capitulos": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "numero": { "type": "number" },
+              "titulo": { "type": "string" },
+              "paginaInicial": { "type": "number" },
+              "conteudo": { "type": "string" }
+            }
+          }
+        },
+        "status": { "type": "string", "enum": ["ativo", "oculto", "rascunho"] },
+        "destaque": { "type": "boolean" },
+        "ordem": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "titulo", "autor", "capa", "descricao", "generos", "ano", "paginas", "idioma", "editora", "avaliacao", "status", "destaque"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile and aggregate reading statistics",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "nome": { "type": "string" },
+        "email": { "type": "string" },
+        "foto": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "streakDays": { "type": "number" },
+        "totalMinutesRead": { "type": "number" },
+        "preferenciasLeitor": {
+          "type": "object",
+          "properties": {
+            "fontSize": { "type": "number" },
+            "fontFamily": { "type": "string" },
+            "lineHeight": { "type": "number" },
+            "maxWidth": { "type": "string" },
+            "theme": { "type": "string", "enum": ["dark", "sepia", "light"] }
+          }
+        },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["uid", "nome", "role"]
+    },
+    "UserBookItem": {
+      "title": "UserBookItem",
+      "description": "Isolated per-user reading progress, list status, favorite, and rating for a book",
+      "type": "object",
+      "properties": {
+        "bookId": { "type": "string" },
+        "userId": { "type": "string" },
+        "inMyList": { "type": "boolean" },
+        "isFavorite": { "type": "boolean" },
+        "isDownloaded": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["nenhum", "quero_ler", "lendo", "concluido"] },
+        "paginaAtual": { "type": "number" },
+        "totalPaginas": { "type": "number" },
+        "progresso": { "type": "number" },
+        "avaliacaoUsuario": { "type": "number" },
+        "recomendaria": { "type": "boolean" },
+        "minutosLidos": { "type": "number" },
+        "ultimoAcesso": { "type": "string" }
+      },
+      "required": ["bookId", "userId", "status", "paginaAtual", "progresso"]
+    },
+    "CustomCategory": {
+      "title": "CustomCategory",
+      "description": "Admin-managed custom shelf categories",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "titulo": { "type": "string" },
+        "icone": { "type": "string" },
+        "generoFiltro": { "type": "string" },
+        "ordem": { "type": "number" }
+      },
+      "required": ["id", "titulo", "generoFiltro", "ordem"]
+    },
+    "HomeRow": {
+      "title": "HomeRow",
+      "description": "Dynamic home screen row shelf configuration managed by administrators",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "titulo": { "type": "string" },
+        "ordem": { "type": "number" },
+        "ativo": { "type": "boolean" },
+        "tipo": {
+          "type": "string",
+          "enum": ["top10", "em_alta", "para_voce", "bem_avaliados", "genero", "recentes", "manual"]
+        },
+        "generoFiltro": { "type": "string" },
+        "bookIds": { "type": "array", "items": { "type": "string" } },
+        "showRank": { "type": "boolean" }
+      },
+      "required": ["id", "titulo", "ordem", "ativo", "tipo"]
+    },
+    "PlatformSettings": {
+      "title": "PlatformSettings",
+      "description": "Global LIVROFLIX visual identity, texts, colors, Hero, Top 10, and navigation settings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "siteName": { "type": "string" },
+        "logoText": { "type": "string" },
+        "footerDescription": { "type": "string" },
+        "heroButtonText": { "type": "string" },
+        "readButtonText": { "type": "string" },
+        "primaryColor": { "type": "string" },
+        "accentColor": { "type": "string" },
+        "backgroundColor": { "type": "string" },
+        "cardBackgroundColor": { "type": "string" },
+        "heroBookIds": { "type": "array", "items": { "type": "string" } },
+        "heroAutoRotateSeconds": { "type": "number" },
+        "top10Mode": { "type": "string", "enum": ["auto", "manual"] },
+        "top10BookIds": { "type": "array", "items": { "type": "string" } },
+        "headerCategories": { "type": "array", "items": { "type": "string" } },
+        "catalogSeeded": { "type": "boolean" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "siteName", "primaryColor", "backgroundColor", "top10Mode", "catalogSeeded"]
+    }
+  },
+  "firestore": {
+    "/books/{bookId}": {
+      "schema": { "$ref": "#/entities/Book" },
+      "description": "Public book catalog managed exclusively by administrators"
+    },
+    "/categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/CustomCategory" },
+      "description": "Custom categories configured by administrators"
+    },
+    "/home_rows/{rowId}": {
+      "schema": { "$ref": "#/entities/HomeRow" },
+      "description": "Dynamic home page rows, order, and book assignments managed by administrators"
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/PlatformSettings" },
+      "description": "Global platform configuration, texts, colors, Hero, and Top 10 settings"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile document isolated per user (readable by owner and admin)"
+    },
+    "/users/{userId}/library/{bookId}": {
+      "schema": { "$ref": "#/entities/UserBookItem" },
+      "description": "Strict per-user reading progress, list, favorites, and ratings (readable by owner and admin)"
+    }
+  }
+}
