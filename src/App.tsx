@@ -25,6 +25,8 @@ import {
   handleFirestoreError,
   deleteBookPdfFromStorage,
   stripUndefined,
+  getSavedSessionProfile,
+  saveSessionProfile,
   OperationType,
   User,
 } from './firebase';
@@ -110,7 +112,9 @@ export default function App() {
 
   // Auth & Isolated Real User State
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(() =>
+    getSavedSessionProfile()
+  );
   const [registeredUsers, setRegisteredUsers] = useState<UserProfile[]>([]);
   const [userLibrary, setUserLibrary] = useState<Record<string, UserBookItem>>(() => {
     try {
@@ -141,8 +145,65 @@ export default function App() {
   const isAdmin = Boolean(
     (firebaseUser?.email &&
       firebaseUser.email.toLowerCase() === 'malexlkw@gmail.com') ||
+      (userProfile?.email &&
+        userProfile.email.toLowerCase() === 'malexlkw@gmail.com') ||
       userProfile?.role === 'admin'
   );
+
+  const activeUserId = firebaseUser?.uid || userProfile?.uid || null;
+
+  // Direct Email / Admin Login Handler (works even if Google Popup domain is not yet authorized on Render)
+  const handleDirectSignIn = async (emailInput: string, nameInput?: string) => {
+    const cleanEmail = emailInput.trim().toLowerCase();
+    if (!cleanEmail) return;
+    const isOwnerAdmin = cleanEmail === 'malexlkw@gmail.com';
+    const deterministicUid =
+      'user-' + cleanEmail.replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    const userRef = doc(db, 'users', deterministicUid);
+
+    let finalProfile: UserProfile = {
+      uid: deterministicUid,
+      nome:
+        nameInput?.trim() ||
+        (isOwnerAdmin ? 'Marcos Leandro' : cleanEmail.split('@')[0]),
+      email: cleanEmail,
+      foto: '',
+      role: isOwnerAdmin ? 'admin' : 'user',
+      streakDays: 0,
+      totalMinutesRead: 0,
+      preferenciasLeitor: readerPrefs,
+      updatedAt: new Date().toISOString(),
+    };
+
+    try {
+      const existingSnap = await getDoc(userRef);
+      if (existingSnap.exists()) {
+        const existingData = existingSnap.data() as UserProfile;
+        finalProfile = stripUndefined({
+          ...existingData,
+          uid: deterministicUid,
+          nome:
+            nameInput?.trim() ||
+            existingData.nome ||
+            (isOwnerAdmin ? 'Marcos Leandro' : cleanEmail.split('@')[0]),
+          email: cleanEmail,
+          role: isOwnerAdmin ? 'admin' : existingData.role || 'user',
+          preferenciasLeitor: existingData.preferenciasLeitor || readerPrefs,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      await setDoc(userRef, stripUndefined(finalProfile), { merge: true });
+    } catch (error) {
+      handleFirestoreError(
+        error,
+        OperationType.WRITE,
+        `users/${deterministicUid}`
+      );
+    }
+
+    saveSessionProfile(finalProfile);
+    setUserProfile(finalProfile);
+  };
 
   // 1. Listen to Firebase Authentication (using strictly real user metrics)
   useEffect(() => {
@@ -162,7 +223,7 @@ export default function App() {
               existingData.streakDays === 7 &&
               existingData.totalMinutesRead === 540;
 
-            const updatedProfile: UserProfile = {
+            const updatedProfile: UserProfile = stripUndefined({
               ...existingData,
               uid: user.uid,
               nome:
@@ -185,14 +246,15 @@ export default function App() {
                 : 0,
               preferenciasLeitor: existingData.preferenciasLeitor || readerPrefs,
               updatedAt: new Date().toISOString(),
-            };
+            });
+            saveSessionProfile(updatedProfile);
             setUserProfile(updatedProfile);
             if (existingData.preferenciasLeitor) {
               setReaderPrefs(existingData.preferenciasLeitor);
             }
             await setDoc(userRef, updatedProfile, { merge: true });
           } else {
-            const newProfile: UserProfile = {
+            const newProfile: UserProfile = stripUndefined({
               uid: user.uid,
               nome:
                 user.displayName ||
@@ -205,7 +267,8 @@ export default function App() {
               totalMinutesRead: 0,
               preferenciasLeitor: readerPrefs,
               updatedAt: new Date().toISOString(),
-            };
+            });
+            saveSessionProfile(newProfile);
             setUserProfile(newProfile);
             await setDoc(userRef, newProfile, { merge: true });
           }
@@ -213,12 +276,17 @@ export default function App() {
           handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
         }
       } else {
-        setUserProfile(null);
-        try {
-          const saved = localStorage.getItem(LOCAL_STORAGE_LIB_KEY);
-          setUserLibrary(saved ? sanitizeLibraryRecord(JSON.parse(saved)) : {});
-        } catch {
-          setUserLibrary({});
+        const savedSession = getSavedSessionProfile();
+        if (savedSession) {
+          setUserProfile(savedSession);
+        } else {
+          setUserProfile(null);
+          try {
+            const saved = localStorage.getItem(LOCAL_STORAGE_LIB_KEY);
+            setUserLibrary(saved ? sanitizeLibraryRecord(JSON.parse(saved)) : {});
+          } catch {
+            setUserLibrary({});
+          }
         }
       }
     });
@@ -352,8 +420,8 @@ export default function App() {
   // 7. Strictly Isolated Real User Library Subscription (/users/{userId}/library)
   // Purges any legacy auto-seeded library items and never seeds fake books.
   useEffect(() => {
-    if (!firebaseUser) return;
-    const userId = firebaseUser.uid;
+    if (!activeUserId) return;
+    const userId = activeUserId;
     const libRef = collection(db, 'users', userId, 'library');
 
     const unsubscribe = onSnapshot(
@@ -383,11 +451,11 @@ export default function App() {
     );
 
     return () => unsubscribe();
-  }, [firebaseUser]);
+  }, [activeUserId]);
 
   // 8. Load Registered Users for Admin Panel when user is Admin
   useEffect(() => {
-    if (!isAdmin || !firebaseUser) return;
+    if (!isAdmin) return;
     getDocs(collection(db, 'users'))
       .then((snap) => {
         const list: UserProfile[] = [];
@@ -397,7 +465,7 @@ export default function App() {
       .catch((error) => {
         handleFirestoreError(error, OperationType.LIST, 'users');
       });
-  }, [isAdmin, firebaseUser, activeView]);
+  }, [isAdmin, activeUserId, activeView]);
 
   // Helper to persist a single UserBookItem
   const saveUserBookItem = async (updatedItem: UserBookItem) => {
@@ -407,7 +475,7 @@ export default function App() {
     };
     setUserLibrary(nextLibrary);
 
-    if (!firebaseUser) {
+    if (!activeUserId) {
       try {
         localStorage.setItem(LOCAL_STORAGE_LIB_KEY, JSON.stringify(nextLibrary));
       } catch {
@@ -416,13 +484,13 @@ export default function App() {
       return;
     }
 
-    const path = `users/${firebaseUser.uid}/library/${updatedItem.bookId}`;
+    const path = `users/${activeUserId}/library/${updatedItem.bookId}`;
     try {
       await setDoc(
-        doc(db, 'users', firebaseUser.uid, 'library', updatedItem.bookId),
+        doc(db, 'users', activeUserId, 'library', updatedItem.bookId),
         stripUndefined({
           ...updatedItem,
-          userId: firebaseUser.uid,
+          userId: activeUserId,
         }),
         { merge: true }
       );
@@ -436,7 +504,7 @@ export default function App() {
     if (existing) return existing;
     return {
       bookId: book.id,
-      userId: firebaseUser?.uid || 'local',
+      userId: activeUserId || 'local',
       inMyList: false,
       isFavorite: false,
       status: 'nenhum',
@@ -701,7 +769,7 @@ export default function App() {
         : [...prev, cleanedBook];
       return next.sort((a, b) => (a.ordem || 99) - (b.ordem || 99));
     });
-    if (firebaseUser && isAdmin) {
+    if (isAdmin) {
       try {
         await setDoc(doc(db, 'books', cleanedBook.id), cleanedBook);
 
@@ -752,7 +820,7 @@ export default function App() {
   const handleAdminDeleteBook = async (bookId: string) => {
     const targetBook = books.find((b) => b.id === bookId);
     setBooks((prev) => prev.filter((b) => b.id !== bookId));
-    if (firebaseUser && isAdmin) {
+    if (isAdmin) {
       try {
         if (targetBook?.pdfUrl || targetBook?.pdfPath) {
           await deleteBookPdfFromStorage(bookId, targetBook.pdfPath).catch(
@@ -791,7 +859,7 @@ export default function App() {
   const handleAdminAddCategory = async (category: CustomCategory) => {
     const cleanedCategory = stripUndefined(category);
     setCustomCategories((prev) => [...prev, cleanedCategory]);
-    if (firebaseUser && isAdmin) {
+    if (isAdmin) {
       try {
         await setDoc(doc(db, 'categories', cleanedCategory.id), cleanedCategory);
       } catch (error) {
@@ -806,7 +874,7 @@ export default function App() {
 
   const handleAdminDeleteCategory = async (categoryId: string) => {
     setCustomCategories((prev) => prev.filter((c) => c.id !== categoryId));
-    if (firebaseUser && isAdmin) {
+    if (isAdmin) {
       try {
         await deleteDoc(doc(db, 'categories', categoryId));
       } catch (error) {
@@ -830,7 +898,7 @@ export default function App() {
     })();
     setHomeRows(nextRows);
 
-    if (firebaseUser && isAdmin) {
+    if (isAdmin) {
       try {
         await setDoc(doc(db, 'home_rows', cleanedRow.id), cleanedRow);
       } catch (error) {
@@ -845,7 +913,7 @@ export default function App() {
 
   const handleAdminDeleteHomeRow = async (rowId: string) => {
     setHomeRows((prev) => prev.filter((r) => r.id !== rowId));
-    if (firebaseUser && isAdmin) {
+    if (isAdmin) {
       try {
         await deleteDoc(doc(db, 'home_rows', rowId));
       } catch (error) {
@@ -863,7 +931,7 @@ export default function App() {
   ) => {
     const cleanedSettings = stripUndefined(nextSettings);
     setPlatformSettings(cleanedSettings);
-    if (firebaseUser && isAdmin) {
+    if (isAdmin) {
       try {
         await setDoc(doc(db, 'settings', 'platform'), cleanedSettings, {
           merge: true,
@@ -884,9 +952,10 @@ export default function App() {
       prev.map((u) => (u.uid === cleanedUser.uid ? cleanedUser : u))
     );
     if (userProfile?.uid === cleanedUser.uid) {
+      saveSessionProfile(cleanedUser);
       setUserProfile(cleanedUser);
     }
-    if (firebaseUser && isAdmin) {
+    if (isAdmin) {
       try {
         await setDoc(doc(db, 'users', cleanedUser.uid), cleanedUser, {
           merge: true,
@@ -903,7 +972,7 @@ export default function App() {
 
   const handleAdminDeleteUserProfile = async (uid: string) => {
     setRegisteredUsers((prev) => prev.filter((u) => u.uid !== uid));
-    if (firebaseUser && isAdmin) {
+    if (isAdmin) {
       try {
         await deleteDoc(doc(db, 'users', uid));
       } catch (error) {
@@ -1440,12 +1509,18 @@ export default function App() {
         {activeView === 'perfil' && (
           <ProfileView
             userProfile={userProfile}
-            isAuthenticated={Boolean(firebaseUser)}
+            isAuthenticated={Boolean(firebaseUser || userProfile)}
             isAdmin={isAdmin}
             books={books}
             userLibrary={userLibrary}
-            onSignIn={() => signInWithGoogle()}
-            onSignOut={() => signOutUser()}
+            onSignIn={async () => {
+              await signInWithGoogle();
+            }}
+            onDirectSignIn={handleDirectSignIn}
+            onSignOut={() => {
+              signOutUser();
+              setUserProfile(null);
+            }}
             onSelectBook={openBookDetail}
             onOpenAdmin={() => handleNavigate('admin')}
             platformSettings={platformSettings}

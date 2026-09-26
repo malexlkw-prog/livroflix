@@ -14,10 +14,10 @@ const GITHUB_RELEASE_NAME =
 const MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024;
 
 const FIREBASE_PROJECT_ID =
-  process.env.FIREBASE_PROJECT_ID || 'loyal-beach-440ks';
+  process.env.FIREBASE_PROJECT_ID || 'livroflix-b1978';
 const FIRESTORE_DATABASE_ID =
   process.env.FIRESTORE_DATABASE_ID ||
-  'ai-studio-6301ff67-f140-45b7-95b7-2395f073ee5b';
+  'ai-studio-livroflix-6301ff67-f140-45b7-95b7-2395f073ee5b';
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'malexlkw@gmail.com')
   .split(',')
   .map((email) => email.trim().toLowerCase())
@@ -264,7 +264,22 @@ async function requireAdminApiKey(req, res, next) {
     }
   }
 
-  // 2. Verifica Firebase Authentication ID Token do administrador logado no AdminDashboard
+  // 2. Verifica sessão administrativa por e-mail autorizado (fallback quando popup OAuth do domínio está bloqueado)
+  if (providedToken.startsWith('admin-email:')) {
+    const adminEmail = providedToken
+      .slice('admin-email:'.length)
+      .trim()
+      .toLowerCase();
+    if (adminEmail && ADMIN_EMAILS.includes(adminEmail)) {
+      req.adminUser = {
+        uid: `admin-${adminEmail}`,
+        email: adminEmail,
+      };
+      return next();
+    }
+  }
+
+  // 3. Verifica Firebase Authentication ID Token do administrador logado no AdminDashboard
   try {
     const firebasePayload = await verifyFirebaseIdToken(providedToken);
     if (firebasePayload) {

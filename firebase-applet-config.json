@@ -1,12 +1,12 @@
 {
-  "projectId": "loyal-beach-440ks",
-  "appId": "1:75914930353:web:1f36e9ab33d968f45e5a90",
-  "apiKey": "AIzaSyAm5t_296QgVl7y5D0HPyxnAx2azovEuhU",
-  "authDomain": "loyal-beach-440ks.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-6301ff67-f140-45b7-95b7-2395f073ee5b",
-  "storageBucket": "loyal-beach-440ks.firebasestorage.app",
-  "messagingSenderId": "75914930353",
+  "projectId": "livroflix-b1978",
+  "appId": "1:245274983301:web:502d369777e259270662ec",
+  "apiKey": "AIzaSyBAfZeG2XGTZZ0sDpsw3ddVtn4BJVENToc",
+  "authDomain": "livroflix-b1978.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-livroflix-6301ff67-f140-45b7-95b7-2395f073ee5b",
+  "storageBucket": "livroflix-b1978.firebasestorage.app",
+  "messagingSenderId": "245274983301",
   "measurementId": "",
-  "oAuthClientId": "75914930353-0neba5vm7gf4nfofn8vnhotg8p349bf2.apps.googleusercontent.com",
+  "oAuthClientId": "245274983301-ssj7mt0k9pgbbq8ph5ipoqb0v76m1mur.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

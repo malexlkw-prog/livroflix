@@ -466,7 +466,8 @@ interface ProfileViewProps {
   isAdmin: boolean;
   books: Book[];
   userLibrary: Record<string, UserBookItem>;
-  onSignIn: () => void;
+  onSignIn: () => Promise<void> | void;
+  onDirectSignIn?: (email: string, nome?: string) => Promise<void> | void;
   onSignOut: () => void;
   onSelectBook: (book: Book) => void;
   onOpenAdmin: () => void;
@@ -480,11 +481,66 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   books,
   userLibrary,
   onSignIn,
+  onDirectSignIn,
   onSignOut,
   onSelectBook,
   onOpenAdmin,
   platformSettings,
 }) => {
+  const [isSigningIn, setIsSigningIn] = React.useState(false);
+  const [authError, setAuthError] = React.useState<string | null>(null);
+  const [directEmail, setDirectEmail] = React.useState('');
+  const [directName, setDirectName] = React.useState('');
+
+  const handleGoogleLoginClick = async () => {
+    setIsSigningIn(true);
+    setAuthError(null);
+    try {
+      await onSignIn();
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code || '';
+      if (code === 'auth/unauthorized-domain') {
+        setAuthError(
+          `O domínio atual (${window.location.hostname}) ainda não foi adicionado em Firebase Console → Authentication → Settings → Authorized domains. Você pode entrar imediatamente usando seu e-mail abaixo.`
+        );
+      } else if (
+        code === 'auth/popup-blocked' ||
+        code === 'auth/popup-closed-by-user'
+      ) {
+        setAuthError(
+          'A janela de login do Google foi bloqueada ou fechada. Tente novamente ou entre diretamente com seu e-mail abaixo.'
+        );
+      } else {
+        setAuthError(
+          err instanceof Error
+            ? err.message
+            : 'Não foi possível concluir o login com Google. Use o acesso por e-mail abaixo.'
+        );
+      }
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleDirectEmailSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanEmail = directEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@') || !onDirectSignIn) return;
+    setIsSigningIn(true);
+    setAuthError(null);
+    try {
+      await onDirectSignIn(cleanEmail, directName.trim() || undefined);
+      setDirectEmail('');
+      setDirectName('');
+    } catch (err: unknown) {
+      setAuthError(
+        err instanceof Error ? err.message : 'Erro ao acessar a conta.'
+      );
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
   const entries = Object.values(userLibrary);
   const completedBooksCount = entries.filter((i) => i.status === 'concluido').length;
   const currentlyReadingCount = entries.filter((i) => i.status === 'lendo').length;
@@ -602,15 +658,79 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             ) : (
               <button
                 type="button"
-                onClick={onSignIn}
-                className="inline-flex items-center gap-2 rounded-lg bg-[#2563EB] hover:bg-[#3B82F6] px-5 py-3 text-sm font-bold text-white shadow-lg transition-all cursor-pointer"
+                disabled={isSigningIn}
+                onClick={handleGoogleLoginClick}
+                className="inline-flex items-center gap-2 rounded-lg bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-60 px-5 py-3 text-sm font-bold text-white shadow-lg transition-all cursor-pointer"
               >
                 <LogIn className="w-4 h-4" />
-                <span>Entrar com Google</span>
+                <span>{isSigningIn ? 'Conectando...' : 'Entrar com Google'}</span>
               </button>
             )}
           </div>
         </div>
+
+        {/* Direct Email / Admin Login Card (works even when Google Popup is blocked on Render) */}
+        {!isAuthenticated && onDirectSignIn && (
+          <div className="rounded-2xl bg-[#071426] border border-blue-400/25 p-6 sm:p-8 space-y-5 shadow-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h2 className="font-display text-xl sm:text-2xl font-bold text-white">
+                  Acesso Rápido por E-mail (Leitor ou Administrador)
+                </h2>
+                <p className="text-xs sm:text-sm text-blue-200/75 mt-1">
+                  Entre com seu e-mail para sincronizar sua biblioteca no Firebase ou acessar o Painel Admin imediatamente.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                disabled={isSigningIn}
+                onClick={() =>
+                  onDirectSignIn('malexlkw@gmail.com', 'Marcos Leandro (Admin)')
+                }
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-500/15 hover:bg-blue-500/25 border border-blue-400/40 px-4 py-2.5 text-xs sm:text-sm font-bold text-[#60A5FA] transition-colors cursor-pointer shrink-0"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                <span>Entrar como Admin (malexlkw@gmail.com)</span>
+              </button>
+            </div>
+
+            {authError && (
+              <div className="rounded-xl bg-amber-500/10 border border-amber-400/30 p-3.5 text-xs sm:text-sm text-amber-200">
+                {authError}
+              </div>
+            )}
+
+            <form
+              onSubmit={handleDirectEmailSubmit}
+              className="grid grid-cols-1 sm:grid-cols-12 gap-3"
+            >
+              <input
+                type="text"
+                value={directName}
+                onChange={(e) => setDirectName(e.target.value)}
+                placeholder="Seu nome (opcional)"
+                className="sm:col-span-4 rounded-xl bg-[#040D1A] border border-blue-400/20 px-4 py-3 text-sm text-white focus:border-[#60A5FA] focus:outline-none"
+              />
+              <input
+                type="email"
+                required
+                value={directEmail}
+                onChange={(e) => setDirectEmail(e.target.value)}
+                placeholder="Digite seu e-mail (ex: malexlkw@gmail.com)"
+                className="sm:col-span-5 rounded-xl bg-[#040D1A] border border-blue-400/20 px-4 py-3 text-sm text-white focus:border-[#60A5FA] focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={isSigningIn}
+                className="sm:col-span-3 inline-flex items-center justify-center gap-2 rounded-xl bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-50 px-5 py-3 text-sm font-bold text-white shadow-lg transition-colors cursor-pointer"
+              >
+                <LogIn className="w-4 h-4" />
+                <span>Entrar</span>
+              </button>
+            </form>
+          </div>
+        )}
 
         {/* Reading Statistics Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
