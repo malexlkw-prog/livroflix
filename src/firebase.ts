@@ -12,32 +12,18 @@ import {
   doc,
   getDocFromServer
 } from 'firebase/firestore';
-import {
-  getStorage,
-  ref,
-  uploadBytesResumable,
-  getDownloadURL,
-  deleteObject,
-} from 'firebase/storage';
 import firebaseConfig from '../firebase-applet-config.json';
+import { BookPdfReadingOption } from './types';
 
 const app = initializeApp(firebaseConfig);
 
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
-export const storage = getStorage(
-  app,
-  firebaseConfig.storageBucket
-    ? `gs://${firebaseConfig.storageBucket}`
-    : undefined
-);
-
-// Reduz o tempo máximo de retentativa do SDK (padrão é 10 minutos / 600.000ms),
-// evitando que erros de bucket não inicializado ou permissão fiquem travados em 0%.
-storage.maxUploadRetryTime = 15000;
-storage.maxOperationRetryTime = 15000;
 
 export const googleProvider = new GoogleAuthProvider();
+
+export const LIVROFLIX_PDF_UPLOAD_ENDPOINT =
+  'https://livroflix-api.onrender.com/api/github/upload-pdf';
 
 export interface BookPdfMetadata {
   pdfUrl: string;
@@ -79,27 +65,14 @@ export function stripUndefined<T>(value: T): T {
 }
 
 /**
- * Faz o upload ou substituição do arquivo PDF do livro no Firebase Storage.
- * Caminho obrigatório: books/{bookId}/book.pdf
+ * Envia o arquivo PDF selecionado no AdminDashboard para o backend do LIVROFLIX
+ * (POST https://livroflix-api.onrender.com/api/github/upload-pdf) autenticando
+ * com o Firebase ID Token do administrador logado (sem expor GITHUB_TOKEN ou chave admin no frontend).
  */
-export async function uploadBookPdfToStorage(
+export async function uploadBookPdfToBackend(
   bookId: string,
-  file: File,
-  onProgress?: (percent: number) => void
-): Promise<BookPdfMetadata> {
-  console.log('[PDF Upload - 1/6] Iniciando processo de upload...', {
-    bookId,
-    fileExists: Boolean(file),
-    isFileInstance: file instanceof File,
-    fileName: file?.name,
-    fileSize: file?.size,
-    fileType: file?.type,
-    projectId: firebaseConfig.projectId,
-    storageBucket: firebaseConfig.storageBucket,
-    currentUserUid: auth.currentUser?.uid || null,
-    currentUserEmail: auth.currentUser?.email || null,
-  });
-
+  file: File
+): Promise<BookPdfReadingOption> {
   if (!file || !(file instanceof File) || file.size === 0) {
     throw new Error('O arquivo selecionado é inválido ou está vazio.');
   }
@@ -109,194 +82,71 @@ export async function uploadBookPdfToStorage(
     file.name.toLowerCase().endsWith('.pdf');
 
   if (!isPdf) {
-    throw new Error('Formato inválido. Envie apenas arquivos PDF (.pdf).');
+    throw new Error('Formato inválido. Selecione somente arquivos PDF (.pdf).');
   }
 
   if (!auth.currentUser) {
     throw new Error(
-      'Usuário não autenticado (storage/unauthenticated). Faça login com sua conta de administrador antes de enviar o PDF.'
+      'Usuário não autenticado. Faça login com sua conta de administrador antes de enviar o PDF.'
     );
   }
 
-  // Verificação rápida do bucket no Firebase Storage para diagnosticar imediatamente
-  // caso o Firebase Storage ainda não tenha sido ativado no Firebase Console (HTTP 404).
-  const bucketName = firebaseConfig.storageBucket;
-  if (bucketName) {
-    try {
-      console.log(
-        `[PDF Upload - 2/6] Verificando disponibilidade do bucket "${bucketName}"...`
-      );
-      const bucketCheckUrl = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(
-        bucketName
-      )}/o?maxResults=1`;
-      const checkResp = await fetch(bucketCheckUrl, { method: 'GET' });
-      console.log(
-        `[PDF Upload - 2/6] Resposta HTTP do bucket "${bucketName}": status ${checkResp.status}`
-      );
+  const idToken = await auth.currentUser.getIdToken();
 
-      if (checkResp.status === 404) {
-        const errBody = await checkResp.text().catch(() => '');
-        console.error(
-          '[PDF Upload - ERRO CRÍTICO] O bucket do Firebase Storage retornou 404 Not Found:',
-          errBody
-        );
-        throw new Error(
-          `O Firebase Storage ainda não está habilitado no Firebase Console para o projeto "${firebaseConfig.projectId}" (o bucket "${bucketName}" retornou 404 Not Found). Acesse https://console.firebase.google.com/project/${firebaseConfig.projectId}/storage e clique em "Começar / Get Started" para ativar o Storage.`
-        );
-      }
-    } catch (checkErr) {
-      if (
-        checkErr instanceof Error &&
-        checkErr.message.includes('ainda não está habilitado no Firebase Console')
-      ) {
-        throw checkErr;
-      }
-      console.warn(
-        '[PDF Upload - 2/6] Aviso ao verificar bucket (prosseguindo para uploadBytesResumable):',
-        checkErr
-      );
-    }
-  }
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('bookId', bookId);
 
-  const pdfPath = `books/${bookId}/book.pdf`;
-  const storageRef = ref(storage, pdfPath);
-
-  console.log(
-    '[PDF Upload - 3/6] ANTES de uploadBytesResumable() -> Criando task para:',
-    {
-      fullPath: storageRef.fullPath,
-      bucket: storageRef.bucket,
-      sizeBytes: file.size,
-    }
-  );
-
-  return new Promise((resolve, reject) => {
-    let settled = false;
-
-    const uploadTask = uploadBytesResumable(storageRef, file, {
-      contentType: 'application/pdf',
-      customMetadata: {
-        bookId,
-        originalFileName: file.name,
-      },
-    });
-
-    console.log(
-      '[PDF Upload - 4/6] DEPOIS de uploadBytesResumable() -> Task iniciada, aguardando eventos state_changed...'
-    );
-
-    // Guard de segurança caso a rede ou o endpoint congele em 0% por mais de 20 segundos
-    const stallTimeout = setTimeout(() => {
-      const snap = uploadTask.snapshot;
-      if (!settled && snap.bytesTransferred === 0) {
-        settled = true;
-        uploadTask.cancel();
-        console.error(
-          '[PDF Upload - TIMEOUT] O upload permaneceu em 0 bytes por 20s.',
-          snap
-        );
-        reject(
-          new Error(
-            `Tempo limite excedido em 0%. Verifique se o Firebase Storage está habilitado em https://console.firebase.google.com/project/${firebaseConfig.projectId}/storage e se as regras (Storage Rules) permitem escrita para o administrador.`
-          )
-        );
-      }
-    }, 20000);
-
-    uploadTask.on(
-      'state_changed',
-      (snapshot) => {
-        const progress =
-          snapshot.totalBytes > 0
-            ? Math.round(
-                (snapshot.bytesTransferred / snapshot.totalBytes) * 100
-              )
-            : 0;
-        console.log('[PDF Upload - 5/6] Evento state_changed:', {
-          state: snapshot.state,
-          bytesTransferred: snapshot.bytesTransferred,
-          totalBytes: snapshot.totalBytes,
-          progress: `${progress}%`,
-        });
-        if (onProgress) {
-          onProgress(progress);
-        }
-      },
-      (error) => {
-        clearTimeout(stallTimeout);
-        if (settled) return;
-        settled = true;
-
-        console.error('[PDF Upload - ERRO] Falha no uploadBytesResumable:', {
-          code: error.code,
-          message: error.message,
-          serverResponse: error.serverResponse,
-          error,
-        });
-
-        let friendlyMessage = `Erro no Firebase Storage (${error.code}): ${error.message}`;
-        if (
-          error.code === 'storage/unauthorized' ||
-          error.code === 'storage/unauthenticated'
-        ) {
-          friendlyMessage =
-            'Permissão negada no Firebase Storage (storage/unauthorized). Verifique as Rules do Storage no Firebase Console para permitir escrita ao administrador.';
-        } else if (
-          error.code === 'storage/retry-limit-exceeded' ||
-          error.code === 'storage/unknown'
-        ) {
-          friendlyMessage = `Falha de comunicação com o bucket "${firebaseConfig.storageBucket}" (${error.code}). Confirme se o Firebase Storage está ativado no Console do Firebase.`;
-        }
-
-        reject(new Error(friendlyMessage));
-      },
-      async () => {
-        clearTimeout(stallTimeout);
-        if (settled) return;
-        settled = true;
-
-        try {
-          console.log(
-            '[PDF Upload - 6/6] Upload 100% concluído! Obtendo getDownloadURL()...'
-          );
-          const pdfUrl = await getDownloadURL(uploadTask.snapshot.ref);
-          console.log(
-            '[PDF Upload - SUCESSO] URL obtida do Firebase Storage:',
-            pdfUrl
-          );
-          resolve({
-            pdfUrl,
-            pdfPath,
-            pdfFileName: file.name,
-            pdfSize: file.size,
-            pdfUpdatedAt: new Date().toISOString(),
-          });
-        } catch (err) {
-          console.error('[PDF Upload - ERRO em getDownloadURL]:', err);
-          reject(err);
-        }
-      }
-    );
+  const response = await fetch(LIVROFLIX_PDF_UPLOAD_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: formData,
   });
+
+  let data: {
+    ok?: boolean;
+    pdfUrl?: string;
+    assetId?: number;
+    assetName?: string;
+    releaseId?: number;
+    releaseTag?: string;
+    error?: string;
+  } | null = null;
+
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok || !data || !data.ok || !data.pdfUrl) {
+    const errorMsg =
+      data?.error ||
+      `Falha ao enviar PDF para o servidor (HTTP ${response.status}).`;
+    throw new Error(errorMsg);
+  }
+
+  return {
+    url: data.pdfUrl,
+    fileName: file.name || data.assetName || 'livro.pdf',
+    size: file.size,
+    uploadedAt: new Date().toISOString(),
+    ...(data.assetId !== undefined ? { assetId: data.assetId } : {}),
+    ...(data.releaseId !== undefined ? { releaseId: data.releaseId } : {}),
+    ...(data.releaseTag !== undefined ? { releaseTag: data.releaseTag } : {}),
+  };
 }
 
 /**
- * Remove o arquivo PDF do livro do Firebase Storage (books/{bookId}/book.pdf).
+ * Mantido apenas por compatibilidade de assinatura; não apaga assets do GitHub nem usa Firebase Storage.
  */
 export async function deleteBookPdfFromStorage(
-  bookId: string,
-  customPath?: string
+  _bookId: string,
+  _customPath?: string
 ): Promise<void> {
-  const targetPath = customPath || `books/${bookId}/book.pdf`;
-  const storageRef = ref(storage, targetPath);
-  try {
-    await deleteObject(storageRef);
-  } catch (error: unknown) {
-    const code = (error as { code?: string })?.code;
-    if (code !== 'storage/object-not-found') {
-      throw error;
-    }
-  }
+  return;
 }
 
 export enum OperationType {

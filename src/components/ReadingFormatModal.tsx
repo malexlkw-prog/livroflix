@@ -10,13 +10,14 @@ import { Book, ReadingFormat, ReadingFormatOption } from '../types';
  */
 export function getAvailableReadingFormats(book: Book): ReadingFormatOption[] {
   const formats: ReadingFormatOption[] = [];
+  const pdfUrl = book.readingOptions?.pdf?.url || book.pdfUrl;
 
-  if (book.pdfUrl && book.pdfUrl.trim() !== '') {
+  if (pdfUrl && pdfUrl.trim() !== '') {
     formats.push({
       format: 'pdf',
       icon: '📄',
       title: 'PDF',
-      subtitle: 'Ler em PDF',
+      subtitle: 'Ler no leitor do LIVROFLIX',
     });
   }
 
@@ -37,6 +38,7 @@ export const ReadingFormatModal: React.FC<ReadingFormatModalProps> = ({
   if (!book) return null;
 
   const availableFormats = getAvailableReadingFormats(book);
+  const pdfUrl = book.readingOptions?.pdf?.url || book.pdfUrl || '';
 
   return (
     <div
@@ -73,28 +75,53 @@ export const ReadingFormatModal: React.FC<ReadingFormatModalProps> = ({
         {/* Lista de Formatos Disponíveis */}
         {availableFormats.length > 0 ? (
           <div className="space-y-3">
-            {availableFormats.map((option) => (
-              <button
-                key={option.format}
-                type="button"
-                onClick={() => onSelectFormat(book, option.format)}
-                className="w-full flex items-center gap-4 rounded-xl bg-[#040D1A] hover:bg-[#0B1E36] border border-blue-400/25 hover:border-[#60A5FA] p-4 sm:p-5 text-left transition-all cursor-pointer group"
-              >
-                <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-blue-500/15 border border-blue-400/30 text-2xl">
-                  <span role="img" aria-label={option.title}>
-                    {option.icon}
-                  </span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-display text-lg font-bold text-white group-hover:text-[#60A5FA] transition-colors">
-                    {option.icon} {option.title}
-                  </p>
-                  <p className="text-xs sm:text-sm text-blue-200/75 mt-0.5">
-                    {option.subtitle}
-                  </p>
-                </div>
-              </button>
-            ))}
+            {availableFormats.map((option) =>
+              option.format === 'pdf' && pdfUrl ? (
+                <a
+                  key={option.format}
+                  href={pdfUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => onSelectFormat(book, option.format)}
+                  className="w-full flex items-center gap-4 rounded-xl bg-[#040D1A] hover:bg-[#0B1E36] border border-blue-400/25 hover:border-[#60A5FA] p-4 sm:p-5 text-left transition-all cursor-pointer group"
+                >
+                  <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-blue-500/15 border border-blue-400/30 text-2xl">
+                    <span role="img" aria-label={option.title}>
+                      {option.icon}
+                    </span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-display text-lg font-bold text-white group-hover:text-[#60A5FA] transition-colors">
+                      {option.icon} {option.title}
+                    </p>
+                    <p className="text-xs sm:text-sm text-blue-200/75 mt-0.5">
+                      {option.subtitle}
+                    </p>
+                  </div>
+                </a>
+              ) : (
+                <button
+                  key={option.format}
+                  type="button"
+                  onClick={() => onSelectFormat(book, option.format)}
+                  className="w-full flex items-center gap-4 rounded-xl bg-[#040D1A] hover:bg-[#0B1E36] border border-blue-400/25 hover:border-[#60A5FA] p-4 sm:p-5 text-left transition-all cursor-pointer group"
+                >
+                  <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-blue-500/15 border border-blue-400/30 text-2xl">
+                    <span role="img" aria-label={option.title}>
+                      {option.icon}
+                    </span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-display text-lg font-bold text-white group-hover:text-[#60A5FA] transition-colors">
+                      {option.icon} {option.title}
+                    </p>
+                    <p className="text-xs sm:text-sm text-blue-200/75 mt-0.5">
+                      {option.subtitle}
+                    </p>
+                  </div>
+                </button>
+              )
+            )}
           </div>
         ) : (
           <div className="rounded-xl bg-[#040D1A] border border-blue-400/15 p-6 text-center space-y-2">

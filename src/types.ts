@@ -18,6 +18,21 @@ export interface BookChapter {
   conteudo: string;
 }
 
+export interface BookPdfReadingOption {
+  url: string;
+  fileName: string;
+  size: number;
+  uploadedAt: string;
+  assetId?: number;
+  releaseId?: number;
+  releaseTag?: string;
+}
+
+export interface BookReadingOptions {
+  pdf?: BookPdfReadingOption;
+  [key: string]: unknown;
+}
+
 export interface Book {
   id: string;
   titulo: string;
@@ -38,7 +53,7 @@ export interface Book {
   recomendacoesPositivas?: number;
   leiturasCount?: number;
   arquivo: string;
-  // Dados do formato de leitura PDF (Firebase Storage: books/{bookId}/book.pdf)
+  readingOptions?: BookReadingOptions;
   pdfUrl?: string;
   pdfPath?: string;
   pdfFileName?: string;

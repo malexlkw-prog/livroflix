@@ -29,8 +29,7 @@ import {
 import { collection, getDocs } from 'firebase/firestore';
 import {
   db,
-  uploadBookPdfToStorage,
-  deleteBookPdfFromStorage,
+  uploadBookPdfToBackend,
   formatPdfFileSize,
 } from '../firebase';
 import {
@@ -88,6 +87,7 @@ const EMPTY_BOOK_FORM: Omit<Book, 'id'> = {
   totalAvaliacoes: 0,
   leiturasCount: 0,
   arquivo: '',
+  readingOptions: {},
   pdfUrl: '',
   pdfPath: '',
   pdfFileName: '',
@@ -152,11 +152,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     },
   ]);
 
-  // Estados do Upload de PDF ("Opções de leitura")
+  // Estados do Upload de PDF ("OPÇÕES DE LEITURA")
+  const [selectedPdfFile, setSelectedPdfFile] = useState<File | null>(null);
+  const [pdfBookIdLocked, setPdfBookIdLocked] = useState<boolean>(false);
   const [pdfUploadStatus, setPdfUploadStatus] = useState<
     'idle' | 'uploading' | 'available' | 'error'
   >('idle');
-  const [pdfUploadProgress, setPdfUploadProgress] = useState<number>(0);
   const [pdfErrorMessage, setPdfErrorMessage] = useState<string | null>(null);
   const pdfFileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -214,7 +215,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Book Form Helpers
   const resolveCurrentBookId = (): string => {
     if (editingId) return editingId;
-    if (formState.pdfPath) return draftBookId;
+    if (pdfBookIdLocked || formState.readingOptions?.pdf?.url) return draftBookId;
     if (formState.titulo.trim()) {
       const slug =
         formState.titulo
@@ -226,20 +227,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         '-' +
         Date.now().toString().slice(-4);
       setDraftBookId(slug);
+      setPdfBookIdLocked(true);
       return slug;
     }
+    setPdfBookIdLocked(true);
     return draftBookId;
   };
 
   const startNewBook = () => {
     setEditingId(null);
     setDraftBookId('livro-' + Date.now());
-    setFormState({ ...EMPTY_BOOK_FORM, ordem: books.length + 1 });
+    setPdfBookIdLocked(false);
+    setSelectedPdfFile(null);
+    setFormState({ ...EMPTY_BOOK_FORM, readingOptions: {}, ordem: books.length + 1 });
     setGenresInput('');
     setCharactersInput('');
     setKeywordsInput('');
     setPdfUploadStatus('idle');
-    setPdfUploadProgress(0);
     setPdfErrorMessage(null);
     setChaptersList([
       {
@@ -255,6 +259,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const startEditBook = (book: Book) => {
     setEditingId(book.id);
     setDraftBookId(book.id);
+    setPdfBookIdLocked(true);
+    setSelectedPdfFile(null);
+
+    const existingPdfOption = book.readingOptions?.pdf?.url
+      ? book.readingOptions.pdf
+      : book.pdfUrl
+      ? {
+          url: book.pdfUrl,
+          fileName: book.pdfFileName || 'livro.pdf',
+          size: book.pdfSize || 0,
+          uploadedAt: book.pdfUpdatedAt || new Date().toISOString(),
+        }
+      : undefined;
+
     setFormState({
       titulo: book.titulo,
       autor: book.autor,
@@ -273,18 +291,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       totalAvaliacoes: book.totalAvaliacoes || 0,
       leiturasCount: book.leiturasCount || 0,
       arquivo: book.arquivo,
-      pdfUrl: book.pdfUrl || '',
+      readingOptions: {
+        ...(book.readingOptions || {}),
+        ...(existingPdfOption ? { pdf: existingPdfOption } : {}),
+      },
+      pdfUrl: existingPdfOption?.url || '',
       pdfPath: book.pdfPath || '',
-      pdfFileName: book.pdfFileName || '',
-      pdfSize: book.pdfSize || 0,
-      pdfUpdatedAt: book.pdfUpdatedAt || '',
+      pdfFileName: existingPdfOption?.fileName || '',
+      pdfSize: existingPdfOption?.size || 0,
+      pdfUpdatedAt: existingPdfOption?.uploadedAt || '',
       status: book.status,
       destaque: book.destaque,
       ordem: book.ordem || 1,
       ...(book.capitulos ? { capitulos: book.capitulos } : {}),
     });
-    setPdfUploadStatus(book.pdfUrl ? 'available' : 'idle');
-    setPdfUploadProgress(book.pdfUrl ? 100 : 0);
+    setPdfUploadStatus(existingPdfOption ? 'available' : 'idle');
     setPdfErrorMessage(null);
     setGenresInput(book.generos.join(', '));
     setCharactersInput((book.personagens || []).join(', '));
@@ -304,19 +325,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setActiveTab('formulario');
   };
 
-  // Upload ou substituição do PDF do livro no Firebase Storage (books/{bookId}/book.pdf)
-  const handlePdfFileSelect = async (
-    e: React.ChangeEvent<HTMLInputElement>
-  ) => {
+  // Seleção do arquivo PDF no input ("Selecionar PDF" ou "Substituir PDF")
+  const handlePdfFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = e.target.files;
-    const file = selectedFiles && selectedFiles.length > 0 ? selectedFiles[0] : null;
-
-    console.log('[AdminDashboard] Arquivo selecionado no input:', {
-      hasFile: Boolean(file),
-      name: file?.name,
-      size: file?.size,
-      type: file?.type,
-    });
+    const file =
+      selectedFiles && selectedFiles.length > 0 ? selectedFiles[0] : null;
 
     if (!file) return;
 
@@ -326,6 +339,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     if (!isPdf) {
       e.target.value = '';
+      setSelectedPdfFile(null);
       setPdfUploadStatus('error');
       setPdfErrorMessage(
         'Arquivo inválido. Selecione somente arquivos no formato PDF (.pdf).'
@@ -333,83 +347,105 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       return;
     }
 
+    setSelectedPdfFile(file);
+    setPdfErrorMessage(null);
+    if (pdfUploadStatus === 'error') {
+      setPdfUploadStatus(
+        formState.readingOptions?.pdf?.url ? 'available' : 'idle'
+      );
+    }
+
+    if (pdfFileInputRef.current) {
+      pdfFileInputRef.current.value = '';
+    }
+  };
+
+  // Envio do PDF selecionado para POST https://livroflix-api.onrender.com/api/github/upload-pdf
+  const handleUploadSelectedPdf = async () => {
+    if (!selectedPdfFile) return;
+
     const targetBookId = resolveCurrentBookId();
     setPdfUploadStatus('uploading');
-    setPdfUploadProgress(0);
     setPdfErrorMessage(null);
 
     try {
-      console.log(
-        `[AdminDashboard] Chamando uploadBookPdfToStorage para bookId="${targetBookId}" (caminho: books/${targetBookId}/book.pdf)...`
-      );
-      const metadata = await uploadBookPdfToStorage(
+      const uploadedPdf = await uploadBookPdfToBackend(
         targetBookId,
-        file,
-        (percent) => {
-          setPdfUploadProgress(percent);
-        }
+        selectedPdfFile
       );
-      console.log(
-        '[AdminDashboard] Retorno de uploadBookPdfToStorage recebido com sucesso:',
-        metadata
-      );
+
+      const nextReadingOptions = {
+        ...(formState.readingOptions || {}),
+        pdf: {
+          url: uploadedPdf.url,
+          fileName: uploadedPdf.fileName,
+          size: uploadedPdf.size,
+          uploadedAt: uploadedPdf.uploadedAt,
+          ...(uploadedPdf.assetId !== undefined
+            ? { assetId: uploadedPdf.assetId }
+            : {}),
+          ...(uploadedPdf.releaseId !== undefined
+            ? { releaseId: uploadedPdf.releaseId }
+            : {}),
+          ...(uploadedPdf.releaseTag !== undefined
+            ? { releaseTag: uploadedPdf.releaseTag }
+            : {}),
+        },
+      };
 
       const updatedForm: Omit<Book, 'id'> = {
         ...formState,
-        pdfUrl: metadata.pdfUrl,
-        pdfPath: metadata.pdfPath,
-        pdfFileName: metadata.pdfFileName,
-        pdfSize: metadata.pdfSize,
-        pdfUpdatedAt: metadata.pdfUpdatedAt,
+        readingOptions: nextReadingOptions,
+        pdfUrl: uploadedPdf.url,
+        pdfFileName: uploadedPdf.fileName,
+        pdfSize: uploadedPdf.size,
+        pdfUpdatedAt: uploadedPdf.uploadedAt,
       };
-      setFormState(updatedForm);
-      setPdfUploadStatus('available');
-      setPdfUploadProgress(100);
 
-      // Se já estiver editando um livro salvo no catálogo, atualiza imediatamente o documento /books/{bookId}
-      if (editingId) {
-        const existingBook = books.find((b) => b.id === editingId);
-        if (existingBook) {
-          await onSaveBook({
-            ...existingBook,
-            ...updatedForm,
-            id: editingId,
-          });
-        }
+      setFormState(updatedForm);
+      setSelectedPdfFile(null);
+      setPdfUploadStatus('available');
+
+      // Se o livro já existe no catálogo (/books/{bookId}), salva imediatamente no Firestore
+      const existingBook = books.find((b) => b.id === targetBookId);
+      if (editingId && existingBook) {
+        await onSaveBook({
+          ...existingBook,
+          ...updatedForm,
+          id: targetBookId,
+        });
       }
 
-      notifySaved(`PDF "${metadata.pdfFileName}" enviado com sucesso!`);
+      notifySaved(`PDF "${uploadedPdf.fileName}" enviado com sucesso!`);
     } catch (error: unknown) {
-      console.error('[AdminDashboard] Erro capturado no upload do PDF:', error);
       setPdfUploadStatus('error');
       setPdfErrorMessage(
         error instanceof Error
           ? error.message
-          : 'Erro no upload do PDF. Tente novamente.'
+          : 'Erro ao enviar o PDF. Tente novamente.'
       );
-    } finally {
-      if (pdfFileInputRef.current) {
-        pdfFileInputRef.current.value = '';
-      }
     }
   };
 
-  // Remoção do PDF do livro do Firebase Storage e limpeza dos campos no Firestore
+  // Remoção dos dados de PDF do Firestore (sem apagar o asset do GitHub nesta versão)
   const handleRemovePdf = async () => {
-    const targetBookId = editingId || draftBookId;
     try {
-      await deleteBookPdfFromStorage(targetBookId, formState.pdfPath);
+      const preservedReadingOptions = { ...(formState.readingOptions || {}) };
+      delete preservedReadingOptions.pdf;
+
       const clearedForm: Omit<Book, 'id'> = {
         ...formState,
+        readingOptions: preservedReadingOptions,
         pdfUrl: '',
         pdfPath: '',
         pdfFileName: '',
         pdfSize: 0,
         pdfUpdatedAt: '',
       };
+
       setFormState(clearedForm);
+      setSelectedPdfFile(null);
       setPdfUploadStatus('idle');
-      setPdfUploadProgress(0);
       setPdfErrorMessage(null);
 
       if (editingId) {
@@ -423,7 +459,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         }
       }
 
-      notifySaved('Arquivo PDF removido deste livro.');
+      notifySaved('PDF removido das opções de leitura deste livro.');
     } catch (error: unknown) {
       setPdfUploadStatus('error');
       setPdfErrorMessage(
@@ -473,7 +509,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     const id =
       editingId ||
-      (formState.pdfPath
+      (pdfBookIdLocked || formState.readingOptions?.pdf?.url
         ? draftBookId
         : formState.titulo
             .toLowerCase()
@@ -1220,19 +1256,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {/* ===================================================================
-                OPÇÕES DE LEITURA (Etapa 1: 📄 PDF via Firebase Storage)
+                OPÇÕES DE LEITURA (📄 PDF)
                =================================================================== */}
             <div className="space-y-4 pt-4 border-t border-blue-400/15">
               <div>
-                <h3 className="font-display text-xl font-bold text-white">
-                  Opções de leitura
+                <h3 className="font-display text-xl font-bold text-white uppercase tracking-wide">
+                  OPÇÕES DE LEITURA
                 </h3>
                 <p className="text-xs text-blue-200/70">
-                  Gerencie os formatos de leitura disponíveis para este livro. O arquivo PDF é armazenado em{' '}
-                  <code className="text-[#60A5FA] font-mono">
-                    books/{editingId || draftBookId}/book.pdf
-                  </code>
-                  .
+                  Gerencie o arquivo PDF vinculado ao livro (<code className="text-[#60A5FA] font-mono">{editingId || draftBookId}</code>).
                 </p>
               </div>
 
@@ -1246,118 +1278,188 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="hidden"
                 />
 
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="flex items-start gap-3.5">
-                    <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-blue-500/15 border border-blue-400/30 text-2xl">
-                      <span role="img" aria-label="PDF">
-                        📄
-                      </span>
-                    </div>
+                {(() => {
+                  const registeredPdf = formState.readingOptions?.pdf?.url
+                    ? formState.readingOptions.pdf
+                    : formState.pdfUrl
+                    ? {
+                        url: formState.pdfUrl,
+                        fileName: formState.pdfFileName || 'livro.pdf',
+                        size: formState.pdfSize || 0,
+                        uploadedAt: formState.pdfUpdatedAt || '',
+                      }
+                    : null;
 
-                    <div className="space-y-1">
-                      <div className="flex flex-wrap items-center gap-2.5">
-                        <span className="font-display text-lg font-bold text-white">
-                          📄 PDF
-                        </span>
-
-                        {/* Indicador de Estado do PDF */}
-                        {pdfUploadStatus === 'uploading' && (
-                          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-400">
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            <span>Enviando... ({pdfUploadProgress}%)</span>
+                  return (
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="flex items-start gap-3.5">
+                        <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-blue-500/15 border border-blue-400/30 text-2xl">
+                          <span role="img" aria-label="PDF">
+                            📄
                           </span>
-                        )}
+                        </div>
 
-                        {pdfUploadStatus === 'available' && formState.pdfUrl && (
-                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-400">
-                            <Check className="w-3.5 h-3.5" />
-                            <span>PDF disponível</span>
-                          </span>
-                        )}
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-2.5">
+                            <span className="font-display text-lg font-bold text-white">
+                              📄 PDF
+                            </span>
 
-                        {pdfUploadStatus === 'idle' && !formState.pdfUrl && (
-                          <span className="text-xs text-blue-200/60">
-                            PDF não enviado
-                          </span>
-                        )}
+                            {pdfUploadStatus === 'uploading' && (
+                              <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-400">
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                <span>Enviando PDF...</span>
+                              </span>
+                            )}
 
-                        {pdfUploadStatus === 'error' && (
-                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-rose-400">
-                            <AlertCircle className="w-3.5 h-3.5" />
-                            <span>Erro no upload</span>
-                          </span>
-                        )}
-                      </div>
+                            {!selectedPdfFile &&
+                              pdfUploadStatus !== 'uploading' &&
+                              registeredPdf && (
+                                <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-400">
+                                  <Check className="w-3.5 h-3.5" />
+                                  <span>PDF disponível</span>
+                                </span>
+                              )}
 
-                      {/* Detalhes do arquivo PDF quando disponível */}
-                      {formState.pdfUrl ? (
-                        <div className="text-xs text-blue-200/80 space-y-0.5 font-mono-num">
-                          <p>
-                            Arquivo:{' '}
-                            <strong className="text-white">
-                              {formState.pdfFileName || 'book.pdf'}
-                            </strong>{' '}
-                            · Tamanho:{' '}
-                            <strong className="text-[#60A5FA]">
-                              {formatPdfFileSize(formState.pdfSize)}
-                            </strong>
-                          </p>
-                          {formState.pdfPath && (
-                            <p className="text-[11px] text-blue-300/60">
-                              Storage: {formState.pdfPath}
+                            {selectedPdfFile &&
+                              pdfUploadStatus !== 'uploading' && (
+                                <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#60A5FA]">
+                                  <FileText className="w-3.5 h-3.5" />
+                                  <span>PDF selecionado</span>
+                                </span>
+                              )}
+
+                            {!selectedPdfFile &&
+                              !registeredPdf &&
+                              pdfUploadStatus !== 'uploading' && (
+                                <span className="text-xs text-blue-200/60">
+                                  Nenhum PDF cadastrado
+                                </span>
+                              )}
+                          </div>
+
+                          {/* Estado 2: PDF selecionado (aguardando envio) */}
+                          {selectedPdfFile ? (
+                            <div className="text-xs text-blue-200/85 space-y-0.5 font-mono-num">
+                              <p>
+                                Arquivo:{' '}
+                                <strong className="text-white">
+                                  {selectedPdfFile.name}
+                                </strong>
+                              </p>
+                              <p>
+                                Tamanho:{' '}
+                                <strong className="text-[#60A5FA]">
+                                  {formatPdfFileSize(selectedPdfFile.size)}
+                                </strong>
+                              </p>
+                            </div>
+                          ) : registeredPdf ? (
+                            /* Estado 3: PDF já cadastrado */
+                            <div className="text-xs text-blue-200/85 space-y-0.5 font-mono-num">
+                              <p>
+                                Arquivo:{' '}
+                                <strong className="text-white">
+                                  {registeredPdf.fileName}
+                                </strong>
+                                {registeredPdf.size > 0 && (
+                                  <>
+                                    {' '}
+                                    · Tamanho:{' '}
+                                    <strong className="text-[#60A5FA]">
+                                      {formatPdfFileSize(registeredPdf.size)}
+                                    </strong>
+                                  </>
+                                )}
+                              </p>
+                            </div>
+                          ) : (
+                            /* Estado 1: Nenhum PDF cadastrado */
+                            <p className="text-xs text-blue-200/65">
+                              Selecione um arquivo PDF para habilitar a leitura em PDF na página pública do livro.
                             </p>
                           )}
                         </div>
-                      ) : (
-                        <p className="text-xs text-blue-200/65">
-                          Envie um arquivo PDF para habilitar a opção "Ler em PDF" na página do livro.
-                        </p>
-                      )}
+                      </div>
+
+                      {/* Botões de Ação conforme os 3 Estados */}
+                      <div className="flex flex-wrap items-center gap-2.5">
+                        {/* Estado 1: Nenhum PDF cadastrado -> botão "Selecionar PDF" */}
+                        {!selectedPdfFile && !registeredPdf && (
+                          <button
+                            type="button"
+                            disabled={pdfUploadStatus === 'uploading'}
+                            onClick={() => pdfFileInputRef.current?.click()}
+                            className="inline-flex items-center gap-2 rounded-lg bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-50 px-4 py-2.5 text-xs sm:text-sm font-bold text-white shadow-md transition-colors cursor-pointer disabled:cursor-not-allowed"
+                          >
+                            <FileText className="w-4 h-4" />
+                            <span>Selecionar PDF</span>
+                          </button>
+                        )}
+
+                        {/* Estado 2: PDF selecionado -> botão "Enviar PDF" */}
+                        {selectedPdfFile && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={pdfUploadStatus === 'uploading'}
+                              onClick={handleUploadSelectedPdf}
+                              className="inline-flex items-center gap-2 rounded-lg bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-50 px-4 py-2.5 text-xs sm:text-sm font-bold text-white shadow-md transition-colors cursor-pointer disabled:cursor-not-allowed"
+                            >
+                              {pdfUploadStatus === 'uploading' ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <Upload className="w-4 h-4" />
+                              )}
+                              <span>
+                                {pdfUploadStatus === 'uploading'
+                                  ? 'Enviando...'
+                                  : 'Enviar PDF'}
+                              </span>
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={pdfUploadStatus === 'uploading'}
+                              onClick={() => pdfFileInputRef.current?.click()}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-[#071426] hover:bg-[#0B1E36] border border-blue-400/25 px-3.5 py-2.5 text-xs sm:text-sm font-semibold text-blue-200 hover:text-white transition-colors cursor-pointer disabled:opacity-50"
+                            >
+                              <span>Selecionar outro</span>
+                            </button>
+                          </>
+                        )}
+
+                        {/* Estado 3: PDF já cadastrado -> botões "Substituir PDF" e "Remover PDF" */}
+                        {!selectedPdfFile && registeredPdf && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={pdfUploadStatus === 'uploading'}
+                              onClick={() => pdfFileInputRef.current?.click()}
+                              className="inline-flex items-center gap-2 rounded-lg bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-50 px-4 py-2.5 text-xs sm:text-sm font-bold text-white shadow-md transition-colors cursor-pointer disabled:cursor-not-allowed"
+                            >
+                              <Upload className="w-4 h-4" />
+                              <span>Substituir PDF</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={pdfUploadStatus === 'uploading'}
+                              onClick={handleRemovePdf}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 px-3.5 py-2.5 text-xs sm:text-sm font-semibold text-rose-300 transition-colors cursor-pointer disabled:opacity-50"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              <span>Remover PDF</span>
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-
-                  {/* Botões de Ação (Enviar PDF / Substituir PDF / Remover PDF) */}
-                  <div className="flex flex-wrap items-center gap-2.5">
-                    <button
-                      type="button"
-                      disabled={pdfUploadStatus === 'uploading'}
-                      onClick={() => pdfFileInputRef.current?.click()}
-                      className="inline-flex items-center gap-2 rounded-lg bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-50 px-4 py-2.5 text-xs sm:text-sm font-bold text-white shadow-md transition-colors cursor-pointer disabled:cursor-not-allowed"
-                    >
-                      <Upload className="w-4 h-4" />
-                      <span>
-                        {formState.pdfUrl ? 'Substituir PDF' : 'Enviar PDF'}
-                      </span>
-                    </button>
-
-                    {formState.pdfUrl && (
-                      <button
-                        type="button"
-                        disabled={pdfUploadStatus === 'uploading'}
-                        onClick={handleRemovePdf}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 px-3.5 py-2.5 text-xs sm:text-sm font-semibold text-rose-300 transition-colors cursor-pointer"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                        <span>Remover PDF</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Barra de Progresso durante Upload */}
-                {pdfUploadStatus === 'uploading' && (
-                  <div className="space-y-1.5 pt-1">
-                    <div className="h-2 w-full rounded-full bg-blue-950 overflow-hidden">
-                      <div
-                        className="h-full bg-[#3B82F6] transition-all duration-200"
-                        style={{ width: `${pdfUploadProgress}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* Mensagem de Erro no Upload */}
-                {pdfUploadStatus === 'error' && pdfErrorMessage && (
+                {pdfErrorMessage && (
                   <div className="rounded-lg bg-rose-500/10 border border-rose-500/30 px-3.5 py-2.5 text-xs text-rose-300 flex items-center gap-2">
                     <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
                     <span>{pdfErrorMessage}</span>

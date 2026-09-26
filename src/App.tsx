@@ -649,16 +649,8 @@ export default function App() {
    */
   const handleSelectReadingFormat = (book: Book, format: ReadingFormat) => {
     setFormatModalBookId(null);
-    if (activeView !== 'leitor' && activeView !== 'leitor-pdf') {
-      setPreviousView(activeView);
-    }
     setSelectedBookId(book.id);
     setSelectedReadingFormat(format);
-
-    if (format === 'pdf') {
-      setActiveView('leitor-pdf');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
   };
 
   const handleNavigate = (view: ActiveView) => {

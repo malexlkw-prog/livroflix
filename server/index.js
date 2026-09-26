@@ -13,6 +13,22 @@ const GITHUB_RELEASE_NAME =
   process.env.GITHUB_RELEASE_NAME || 'LIVROFLIX — Catálogo de PDFs';
 const MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024;
 
+const FIREBASE_PROJECT_ID =
+  process.env.FIREBASE_PROJECT_ID || 'loyal-beach-440ks';
+const FIRESTORE_DATABASE_ID =
+  process.env.FIRESTORE_DATABASE_ID ||
+  'ai-studio-6301ff67-f140-45b7-95b7-2395f073ee5b';
+const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'malexlkw@gmail.com')
+  .split(',')
+  .map((email) => email.trim().toLowerCase())
+  .filter(Boolean);
+
+const GOOGLE_CERTS_URL =
+  'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com';
+
+let cachedGoogleCerts = null;
+let cachedGoogleCertsExpiresAt = 0;
+
 const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',')
       .map((origin) => origin.trim())
@@ -98,17 +114,122 @@ function hasValidPdfSignature(buffer) {
   return buffer.subarray(0, 5).toString('ascii') === '%PDF-';
 }
 
-function requireAdminApiKey(req, res, next) {
-  const configuredKey = process.env.LIVROFLIX_ADMIN_API_KEY;
-
-  if (!configuredKey || configuredKey.trim() === '') {
-    return res.status(503).json({
-      ok: false,
-      error:
-        'Serviço de upload indisponível: LIVROFLIX_ADMIN_API_KEY não está configurada no servidor.',
-    });
+async function getGooglePublicCerts() {
+  const now = Date.now();
+  if (cachedGoogleCerts && now < cachedGoogleCertsExpiresAt) {
+    return cachedGoogleCerts;
   }
 
+  const resp = await fetch(GOOGLE_CERTS_URL);
+  if (!resp.ok) {
+    throw new Error('Falha ao obter certificados públicos do Firebase Auth.');
+  }
+
+  const cacheControl = resp.headers.get('cache-control') || '';
+  const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
+  const maxAgeSeconds = maxAgeMatch ? Number(maxAgeMatch[1]) : 3600;
+
+  cachedGoogleCerts = await resp.json();
+  cachedGoogleCertsExpiresAt = now + maxAgeSeconds * 1000;
+  return cachedGoogleCerts;
+}
+
+async function verifyFirebaseIdToken(idToken) {
+  const parts = String(idToken || '').split('.');
+  if (parts.length !== 3) {
+    return null;
+  }
+
+  const [headerB64, payloadB64, signatureB64] = parts;
+
+  let header;
+  let payload;
+  try {
+    header = JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8'));
+    payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+
+  if (!header || header.alg !== 'RS256' || !header.kid || !payload) {
+    return null;
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const expectedIssuer = `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`;
+
+  if (
+    typeof payload.exp !== 'number' ||
+    payload.exp <= nowSeconds ||
+    typeof payload.iat !== 'number' ||
+    payload.iat > nowSeconds + 300 ||
+    payload.aud !== FIREBASE_PROJECT_ID ||
+    payload.iss !== expectedIssuer ||
+    typeof payload.sub !== 'string' ||
+    !payload.sub.trim()
+  ) {
+    return null;
+  }
+
+  const certs = await getGooglePublicCerts();
+  const cert = certs ? certs[header.kid] : null;
+  if (!cert) {
+    return null;
+  }
+
+  const verifier = crypto.createVerify('RSA-SHA256');
+  verifier.update(`${headerB64}.${payloadB64}`);
+  verifier.end();
+
+  const signatureBuffer = Buffer.from(signatureB64, 'base64url');
+  const isSignatureValid = verifier.verify(cert, signatureBuffer);
+  if (!isSignatureValid) {
+    return null;
+  }
+
+  return payload;
+}
+
+async function isFirebaseUserAdmin(tokenPayload, rawIdToken) {
+  const email =
+    typeof tokenPayload.email === 'string'
+      ? tokenPayload.email.trim().toLowerCase()
+      : '';
+
+  if (email && tokenPayload.email_verified === true && ADMIN_EMAILS.includes(email)) {
+    return true;
+  }
+
+  // Fallback: verifica se o documento /users/{uid} no Firestore tem role === 'admin'
+  try {
+    const firestoreDocUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      FIREBASE_PROJECT_ID
+    )}/databases/${encodeURIComponent(
+      FIRESTORE_DATABASE_ID
+    )}/documents/users/${encodeURIComponent(tokenPayload.sub)}`;
+
+    const docResp = await fetch(firestoreDocUrl, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${rawIdToken}`,
+      },
+    });
+
+    if (docResp.ok) {
+      const docData = await docResp.json();
+      const roleValue = docData?.fields?.role?.stringValue;
+      if (roleValue === 'admin') {
+        return true;
+      }
+    }
+  } catch {
+    // Ignora falha na verificação secundária
+  }
+
+  return false;
+}
+
+async function requireAdminApiKey(req, res, next) {
   const authHeader = req.headers.authorization;
   if (
     !authHeader ||
@@ -129,20 +250,52 @@ function requireAdminApiKey(req, res, next) {
     });
   }
 
-  const expectedBuffer = Buffer.from(configuredKey.trim(), 'utf8');
-  const providedBuffer = Buffer.from(providedToken, 'utf8');
+  // 1. Verifica chave administrativa direta (se configurada no ambiente)
+  const configuredKey = process.env.LIVROFLIX_ADMIN_API_KEY;
+  if (configuredKey && configuredKey.trim() !== '') {
+    const expectedBuffer = Buffer.from(configuredKey.trim(), 'utf8');
+    const providedBuffer = Buffer.from(providedToken, 'utf8');
 
-  if (
-    expectedBuffer.length !== providedBuffer.length ||
-    !crypto.timingSafeEqual(expectedBuffer, providedBuffer)
-  ) {
+    if (
+      expectedBuffer.length === providedBuffer.length &&
+      crypto.timingSafeEqual(expectedBuffer, providedBuffer)
+    ) {
+      return next();
+    }
+  }
+
+  // 2. Verifica Firebase Authentication ID Token do administrador logado no AdminDashboard
+  try {
+    const firebasePayload = await verifyFirebaseIdToken(providedToken);
+    if (firebasePayload) {
+      const isAdmin = await isFirebaseUserAdmin(firebasePayload, providedToken);
+      if (isAdmin) {
+        req.adminUser = {
+          uid: firebasePayload.sub,
+          email: firebasePayload.email || '',
+        };
+        return next();
+      }
+      return res.status(403).json({
+        ok: false,
+        error: 'Acesso negado. O usuário autenticado não possui permissão de administrador.',
+      });
+    }
+  } catch {
+    // Continua para resposta padrão de acesso negado
+  }
+
+  if (!configuredKey || configuredKey.trim() === '') {
     return res.status(403).json({
       ok: false,
-      error: 'Acesso negado. Chave de administração inválida.',
+      error: 'Acesso negado. Token de autenticação inválido ou expirado.',
     });
   }
 
-  next();
+  return res.status(403).json({
+    ok: false,
+    error: 'Acesso negado. Credencial de administração inválida.',
+  });
 }
 
 async function parseGitHubErrorMessage(response, fallbackContext) {
