@@ -57,6 +57,28 @@ export function formatPdfFileSize(bytes?: number): string {
 }
 
 /**
+ * Remove recursivamente quaisquer propriedades com valor `undefined` antes de salvar no Firestore,
+ * evitando o erro "Unsupported field value: undefined" que impedia a gravação para todos os usuários.
+ */
+export function stripUndefined<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => item !== undefined)
+      .map((item) => stripUndefined(item)) as unknown as T;
+  }
+  if (value !== null && typeof value === 'object') {
+    const cleaned: Record<string, unknown> = {};
+    Object.entries(value as Record<string, unknown>).forEach(([k, v]) => {
+      if (v !== undefined) {
+        cleaned[k] = stripUndefined(v);
+      }
+    });
+    return cleaned as T;
+  }
+  return value;
+}
+
+/**
  * Faz o upload ou substituição do arquivo PDF do livro no Firebase Storage.
  * Caminho obrigatório: books/{bookId}/book.pdf
  */
@@ -330,6 +352,7 @@ export function handleFirestoreError(
     path,
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
 }
 
 export async function signInWithGoogle(): Promise<User | null> {

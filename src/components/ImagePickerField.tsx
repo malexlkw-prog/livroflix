@@ -17,9 +17,9 @@ interface ImagePickerFieldProps {
  */
 async function compressImageBlobToDataUrl(
   blob: Blob,
-  maxWidth = 720,
-  maxHeight = 1080,
-  quality = 0.82
+  maxWidth = 540,
+  maxHeight = 810,
+  quality = 0.78
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -44,8 +44,11 @@ async function compressImageBlobToDataUrl(
           return;
         }
         ctx.drawImage(img, 0, 0, width, height);
-        // Use webp or jpeg for compact storage
-        const compressed = canvas.toDataURL('image/jpeg', quality);
+        let compressed = canvas.toDataURL('image/jpeg', quality);
+        // If still large (>300KB in base64), step down quality so Firestore doc never exceeds 1MB
+        if (compressed.length > 300000) {
+          compressed = canvas.toDataURL('image/jpeg', 0.62);
+        }
         resolve(compressed);
       };
       img.onerror = () => resolve(String(reader.result));

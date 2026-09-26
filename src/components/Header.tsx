@@ -259,7 +259,7 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <UserIcon className="w-4 h-4 text-[#60A5FA]" />
               <span className="hidden md:inline text-xs sm:text-sm font-semibold text-white max-w-[140px] truncate">
-                {userProfile ? userProfile.nome : 'Marcos Leandro'}
+                {userProfile ? userProfile.nome : 'Perfil'}
               </span>
             </button>
           </div>

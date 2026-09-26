@@ -281,7 +281,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       status: book.status,
       destaque: book.destaque,
       ordem: book.ordem || 1,
-      capitulos: book.capitulos,
+      ...(book.capitulos ? { capitulos: book.capitulos } : {}),
     });
     setPdfUploadStatus(book.pdfUrl ? 'available' : 'idle');
     setPdfUploadProgress(book.pdfUrl ? 100 : 0);
@@ -551,8 +551,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       ordem: editingRow ? editingRow.ordem : sortedHomeRows.length + 1,
       ativo: editingRow ? editingRow.ativo : true,
       tipo: rowType,
-      generoFiltro: rowType === 'genero' ? rowGenre.trim() : undefined,
-      bookIds: rowType === 'manual' ? rowManualBookIds : undefined,
+      ...(rowType === 'genero' ? { generoFiltro: rowGenre.trim() } : {}),
+      ...(rowType === 'manual' ? { bookIds: rowManualBookIds } : {}),
       showRank: rowShowRank,
       cardSize: rowCardSize,
     };
@@ -1736,6 +1736,71 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   ))}
                 </div>
               </div>
+
+              {/* Categorias Personalizadas da Home & Menu */}
+              <div className="rounded-2xl bg-[#071426] border border-blue-400/20 p-6 space-y-4">
+                <div>
+                  <h3 className="font-display text-xl font-bold text-white">
+                    Categorias Extras (Home & Menu de Categorias)
+                  </h3>
+                  <p className="text-xs text-blue-200/70">
+                    Adicione categorias extras sincronizadas em tempo real para todos os usuários e visitantes.
+                  </p>
+                </div>
+
+                <form
+                  onSubmit={handleCreateCategory}
+                  className="grid grid-cols-1 sm:grid-cols-12 gap-3"
+                >
+                  <input
+                    type="text"
+                    value={catIcon}
+                    onChange={(e) => setCatIcon(e.target.value)}
+                    placeholder="📚"
+                    className="sm:col-span-2 rounded-lg bg-[#040D1A] border border-blue-400/20 px-3 py-2 text-sm text-white text-center"
+                  />
+                  <input
+                    type="text"
+                    required
+                    value={catTitle}
+                    onChange={(e) => {
+                      setCatTitle(e.target.value);
+                      setCatGenre(e.target.value);
+                    }}
+                    placeholder="Nome da categoria (ex: Suspense, Poesia)..."
+                    className="sm:col-span-7 rounded-lg bg-[#040D1A] border border-blue-400/20 px-3.5 py-2 text-sm text-white"
+                  />
+                  <button
+                    type="submit"
+                    className="sm:col-span-3 rounded-lg bg-[#2563EB] hover:bg-[#3B82F6] px-4 py-2 text-xs font-bold text-white cursor-pointer"
+                  >
+                    + Adicionar Categoria
+                  </button>
+                </form>
+
+                {customCategories.length > 0 && (
+                  <div className="flex flex-wrap gap-2 pt-2">
+                    {customCategories.map((c) => (
+                      <span
+                        key={c.id}
+                        className="inline-flex items-center gap-2 rounded-lg bg-[#040D1A] border border-blue-400/25 px-3 py-1.5 text-xs font-semibold text-white"
+                      >
+                        <span>
+                          {c.icone} {c.titulo}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => onDeleteCategory(c.id)}
+                          className="text-rose-400 hover:text-rose-300 cursor-pointer"
+                          title="Excluir categoria"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -1809,12 +1874,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <input
                     type="checkbox"
                     checked={settingsDraft.showHeroRating !== false}
-                    onChange={(e) =>
-                      setSettingsDraft({
+                    onChange={(e) => {
+                      const next = {
                         ...settingsDraft,
                         showHeroRating: e.target.checked,
-                      })
-                    }
+                      };
+                      setSettingsDraft(next);
+                      handlePersistSettings(next);
+                    }}
                     className="h-4 w-4 accent-[#2563EB]"
                   />
                   <span>Mostrar Avaliação (★)</span>
@@ -1824,12 +1891,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <input
                     type="checkbox"
                     checked={settingsDraft.showHeroSynopsis !== false}
-                    onChange={(e) =>
-                      setSettingsDraft({
+                    onChange={(e) => {
+                      const next = {
                         ...settingsDraft,
                         showHeroSynopsis: e.target.checked,
-                      })
-                    }
+                      };
+                      setSettingsDraft(next);
+                      handlePersistSettings(next);
+                    }}
                     className="h-4 w-4 accent-[#2563EB]"
                   />
                   <span>Mostrar Sinopse</span>
@@ -1839,12 +1908,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <input
                     type="checkbox"
                     checked={settingsDraft.showHeroCover !== false}
-                    onChange={(e) =>
-                      setSettingsDraft({
+                    onChange={(e) => {
+                      const next = {
                         ...settingsDraft,
                         showHeroCover: e.target.checked,
-                      })
-                    }
+                      };
+                      setSettingsDraft(next);
+                      handlePersistSettings(next);
+                    }}
                     className="h-4 w-4 accent-[#2563EB]"
                   />
                   <span>Mostrar Capa Lateral</span>
@@ -1868,15 +1939,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         key={b.id}
                         type="button"
                         onClick={() => {
-                          const next = isSelected
+                          const nextIds = isSelected
                             ? settingsDraft.heroBookIds.filter(
                                 (id) => id !== b.id
                               )
                             : [...settingsDraft.heroBookIds, b.id];
-                          setSettingsDraft({
+                          const next = {
                             ...settingsDraft,
-                            heroBookIds: next,
-                          });
+                            heroBookIds: nextIds,
+                          };
+                          setSettingsDraft(next);
+                          handlePersistSettings(next);
                         }}
                         className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-left text-xs transition-colors cursor-pointer ${
                           isSelected
@@ -1925,12 +1998,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </label>
                   <select
                     value={settingsDraft.top10Mode}
-                    onChange={(e) =>
-                      setSettingsDraft({
+                    onChange={(e) => {
+                      const next = {
                         ...settingsDraft,
                         top10Mode: e.target.value as 'auto' | 'manual',
-                      })
-                    }
+                      };
+                      setSettingsDraft(next);
+                      handlePersistSettings(next);
+                    }}
                     className="w-full rounded-lg bg-[#040D1A] border border-blue-400/20 px-3 py-2 text-sm text-white"
                   >
                     <option value="auto">
@@ -1947,12 +2022,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <input
                       type="checkbox"
                       checked={settingsDraft.showTop10 !== false}
-                      onChange={(e) =>
-                        setSettingsDraft({
+                      onChange={(e) => {
+                        const next = {
                           ...settingsDraft,
                           showTop10: e.target.checked,
-                        })
-                      }
+                        };
+                        setSettingsDraft(next);
+                        handlePersistSettings(next);
+                      }}
                       className="h-4 w-4 accent-[#2563EB]"
                     />
                     <span>Exibir Top 10 na Página Inicial</span>
@@ -1975,22 +2052,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           key={b.id}
                           type="button"
                           onClick={() => {
+                            let nextTop10 = settingsDraft.top10BookIds;
                             if (isPicked) {
-                              setSettingsDraft({
-                                ...settingsDraft,
-                                top10BookIds: settingsDraft.top10BookIds.filter(
-                                  (id) => id !== b.id
-                                ),
-                              });
+                              nextTop10 = settingsDraft.top10BookIds.filter(
+                                (id) => id !== b.id
+                              );
                             } else if (settingsDraft.top10BookIds.length < 10) {
-                              setSettingsDraft({
-                                ...settingsDraft,
-                                top10BookIds: [
-                                  ...settingsDraft.top10BookIds,
-                                  b.id,
-                                ],
-                              });
+                              nextTop10 = [
+                                ...settingsDraft.top10BookIds,
+                                b.id,
+                              ];
                             }
+                            const next = {
+                              ...settingsDraft,
+                              top10BookIds: nextTop10,
+                            };
+                            setSettingsDraft(next);
+                            handlePersistSettings(next);
                           }}
                           className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-left text-xs transition-colors cursor-pointer ${
                             isPicked
@@ -2484,12 +2562,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <input
                     type="checkbox"
                     checked={settingsDraft.showDownloadsTab !== false}
-                    onChange={(e) =>
-                      setSettingsDraft({
+                    onChange={(e) => {
+                      const next = {
                         ...settingsDraft,
                         showDownloadsTab: e.target.checked,
-                      })
-                    }
+                      };
+                      setSettingsDraft(next);
+                      handlePersistSettings(next);
+                    }}
                     className="h-4 w-4 accent-[#2563EB]"
                   />
                   <span>Mostrar aba "Downloads" no menu</span>
@@ -2499,12 +2579,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <input
                     type="checkbox"
                     checked={settingsDraft.showCategoriesTab !== false}
-                    onChange={(e) =>
-                      setSettingsDraft({
+                    onChange={(e) => {
+                      const next = {
                         ...settingsDraft,
                         showCategoriesTab: e.target.checked,
-                      })
-                    }
+                      };
+                      setSettingsDraft(next);
+                      handlePersistSettings(next);
+                    }}
                     className="h-4 w-4 accent-[#2563EB]"
                   />
                   <span>Mostrar aba "Categorias" no menu</span>
@@ -2514,12 +2596,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <input
                     type="checkbox"
                     checked={settingsDraft.showSearchButton !== false}
-                    onChange={(e) =>
-                      setSettingsDraft({
+                    onChange={(e) => {
+                      const next = {
                         ...settingsDraft,
                         showSearchButton: e.target.checked,
-                      })
-                    }
+                      };
+                      setSettingsDraft(next);
+                      handlePersistSettings(next);
+                    }}
                     className="h-4 w-4 accent-[#2563EB]"
                   />
                   <span>Mostrar botão de Pesquisa (Lupa)</span>
@@ -2529,12 +2613,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <input
                     type="checkbox"
                     checked={settingsDraft.showProfileAchievements !== false}
-                    onChange={(e) =>
-                      setSettingsDraft({
+                    onChange={(e) => {
+                      const next = {
                         ...settingsDraft,
                         showProfileAchievements: e.target.checked,
-                      })
-                    }
+                      };
+                      setSettingsDraft(next);
+                      handlePersistSettings(next);
+                    }}
                     className="h-4 w-4 accent-[#2563EB]"
                   />
                   <span>Mostrar Conquistas Literárias no Perfil</span>
@@ -2552,6 +2638,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   type="text"
                   value={newHeaderCatInput}
                   onChange={(e) => setNewHeaderCatInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const trimmed = newHeaderCatInput.trim();
+                      if (
+                        trimmed &&
+                        !settingsDraft.headerCategories.includes(trimmed)
+                      ) {
+                        const next = {
+                          ...settingsDraft,
+                          headerCategories: [
+                            ...settingsDraft.headerCategories,
+                            trimmed,
+                          ],
+                        };
+                        setSettingsDraft(next);
+                        setNewHeaderCatInput('');
+                        handlePersistSettings(next);
+                      }
+                    }
+                  }}
                   placeholder="Nova categoria (ex: Suspense, Poesia)..."
                   className="flex-1 rounded-lg bg-[#040D1A] border border-blue-400/20 px-3.5 py-2 text-sm text-white"
                 />
@@ -2563,14 +2670,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       trimmed &&
                       !settingsDraft.headerCategories.includes(trimmed)
                     ) {
-                      setSettingsDraft({
+                      const next = {
                         ...settingsDraft,
                         headerCategories: [
                           ...settingsDraft.headerCategories,
                           trimmed,
                         ],
-                      });
+                      };
+                      setSettingsDraft(next);
                       setNewHeaderCatInput('');
+                      handlePersistSettings(next);
                     }
                   }}
                   className="rounded-lg bg-[#2563EB] px-4 py-2 text-xs font-bold text-white cursor-pointer"
@@ -2588,15 +2697,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <span>{cat}</span>
                     <button
                       type="button"
-                      onClick={() =>
-                        setSettingsDraft({
+                      onClick={() => {
+                        const next = {
                           ...settingsDraft,
                           headerCategories:
                             settingsDraft.headerCategories.filter(
                               (c) => c !== cat
                             ),
-                        })
-                      }
+                        };
+                        setSettingsDraft(next);
+                        handlePersistSettings(next);
+                      }}
                       className="text-rose-400 hover:text-rose-300 cursor-pointer"
                       title="Remover categoria do menu"
                     >

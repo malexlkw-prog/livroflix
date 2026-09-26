@@ -21,7 +21,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() && (
-        (request.auth.token.email == "malexlkw@gmail.com" && request.auth.token.email_verified == true) ||
+        (request.auth.token.email.lower() == "malexlkw@gmail.com" && request.auth.token.email_verified == true) ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
       );
@@ -42,11 +42,17 @@ service cloud.firestore {
 
     // ===============================================================
     // Books Catalog (/books/{bookId})
-    // Public read; EXCLUSIVE Admin write (create, update, delete)
+    // Public read (logged-in and non-logged-in users); Admin full write;
+    // Authenticated users can update rating/read counters.
     // ===============================================================
     match /books/{bookId} {
       allow read: if true;
-      allow create, update: if isAdmin() && isValidBookPayload(request.resource.data);
+      allow create: if isAdmin() && isValidBookPayload(request.resource.data);
+      allow update: if (isAdmin() && isValidBookPayload(request.resource.data)) || (
+        isAuthenticated() &&
+        isValidBookPayload(request.resource.data) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['avaliacao', 'totalAvaliacoes', 'leiturasCount'])
+      );
       allow delete: if isAdmin();
     }
 

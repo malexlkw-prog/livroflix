@@ -24,6 +24,7 @@ import {
   onAuthStateChanged,
   handleFirestoreError,
   deleteBookPdfFromStorage,
+  stripUndefined,
   OperationType,
   User,
 } from './firebase';
@@ -320,7 +321,7 @@ export default function App() {
         const rowsSnap = await getDocs(collection(db, 'home_rows'));
         if (rowsSnap.empty) {
           for (const row of DEFAULT_HOME_ROWS) {
-            await setDoc(doc(db, 'home_rows', row.id), row);
+            await setDoc(doc(db, 'home_rows', row.id), stripUndefined(row));
           }
         }
       } catch (error) {
@@ -419,10 +420,10 @@ export default function App() {
     try {
       await setDoc(
         doc(db, 'users', firebaseUser.uid, 'library', updatedItem.bookId),
-        {
+        stripUndefined({
           ...updatedItem,
           userId: firebaseUser.uid,
-        },
+        }),
         { merge: true }
       );
     } catch (error) {
@@ -591,10 +592,15 @@ export default function App() {
       prev.map((b) => (b.id === book.id ? updatedBook : b))
     );
 
-    if (firebaseUser && isAdmin) {
-      setDoc(doc(db, 'books', book.id), updatedBook, { merge: true }).catch(
-        () => {}
-      );
+    if (firebaseUser) {
+      setDoc(
+        doc(db, 'books', book.id),
+        stripUndefined({
+          avaliacao: nextAvg,
+          totalAvaliacoes: nextTotal,
+        }),
+        { merge: true }
+      ).catch(() => {});
     }
   };
 
@@ -666,20 +672,87 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Admin Handlers — Exclusively allowed for Admin
+  // Sync document title & default reader preferences when platformSettings updates from Admin
+  useEffect(() => {
+    if (platformSettings.siteName) {
+      document.title = platformSettings.siteName;
+    }
+    try {
+      const hasCustomLocalPrefs = localStorage.getItem(LOCAL_STORAGE_PREFS_KEY);
+      if (!hasCustomLocalPrefs && !userProfile?.preferenciasLeitor) {
+        setReaderPrefs((prev) => ({
+          ...prev,
+          theme: platformSettings.defaultReaderTheme || prev.theme,
+          fontSize: platformSettings.defaultReaderFontSize || prev.fontSize,
+          fontFamily:
+            platformSettings.defaultReaderFontFamily || prev.fontFamily,
+        }));
+      }
+    } catch {
+      // ignore
+    }
+  }, [
+    platformSettings.siteName,
+    platformSettings.defaultReaderTheme,
+    platformSettings.defaultReaderFontSize,
+    platformSettings.defaultReaderFontFamily,
+    userProfile?.preferenciasLeitor,
+  ]);
+
+  // Admin Handlers — Exclusively allowed for Admin, persisted to Firestore for all users & visitors
   const handleAdminSaveBook = async (bookToSave: Book) => {
+    const cleanedBook = stripUndefined(bookToSave);
     setBooks((prev) => {
-      const exists = prev.some((b) => b.id === bookToSave.id);
+      const exists = prev.some((b) => b.id === cleanedBook.id);
       const next = exists
-        ? prev.map((b) => (b.id === bookToSave.id ? bookToSave : b))
-        : [...prev, bookToSave];
+        ? prev.map((b) => (b.id === cleanedBook.id ? cleanedBook : b))
+        : [...prev, cleanedBook];
       return next.sort((a, b) => (a.ordem || 99) - (b.ordem || 99));
     });
     if (firebaseUser && isAdmin) {
       try {
-        await setDoc(doc(db, 'books', bookToSave.id), bookToSave);
+        await setDoc(doc(db, 'books', cleanedBook.id), cleanedBook);
+
+        // Automatically sync any new book genres & Hero selection to platformSettings so all users and non-users see them everywhere
+        const existingHeaderCats =
+          platformSettings.headerCategories &&
+          platformSettings.headerCategories.length > 0
+            ? platformSettings.headerCategories
+            : BOOK_CATEGORIES_LIST;
+        const lowerSet = new Set(
+          existingHeaderCats.map((c) => c.toLowerCase())
+        );
+        const newGenres = (cleanedBook.generos || []).filter(
+          (g) => g && !lowerSet.has(g.toLowerCase())
+        );
+
+        let nextHeroIds = platformSettings.heroBookIds || [];
+        let heroChanged = false;
+        if (cleanedBook.destaque && nextHeroIds.length > 0 && !nextHeroIds.includes(cleanedBook.id)) {
+          nextHeroIds = [...nextHeroIds, cleanedBook.id];
+          heroChanged = true;
+        } else if (!cleanedBook.destaque && nextHeroIds.includes(cleanedBook.id)) {
+          nextHeroIds = nextHeroIds.filter((id) => id !== cleanedBook.id);
+          heroChanged = true;
+        }
+
+        if (newGenres.length > 0 || heroChanged) {
+          const updatedSettings: PlatformSettings = stripUndefined({
+            ...platformSettings,
+            headerCategories:
+              newGenres.length > 0
+                ? [...existingHeaderCats, ...newGenres]
+                : existingHeaderCats,
+            heroBookIds: nextHeroIds,
+            updatedAt: new Date().toISOString(),
+          });
+          setPlatformSettings(updatedSettings);
+          await setDoc(doc(db, 'settings', 'platform'), updatedSettings, {
+            merge: true,
+          });
+        }
       } catch (error) {
-        handleFirestoreError(error, OperationType.WRITE, `books/${bookToSave.id}`);
+        handleFirestoreError(error, OperationType.WRITE, `books/${cleanedBook.id}`);
       }
     }
   };
@@ -724,15 +797,16 @@ export default function App() {
   };
 
   const handleAdminAddCategory = async (category: CustomCategory) => {
-    setCustomCategories((prev) => [...prev, category]);
+    const cleanedCategory = stripUndefined(category);
+    setCustomCategories((prev) => [...prev, cleanedCategory]);
     if (firebaseUser && isAdmin) {
       try {
-        await setDoc(doc(db, 'categories', category.id), category);
+        await setDoc(doc(db, 'categories', cleanedCategory.id), cleanedCategory);
       } catch (error) {
         handleFirestoreError(
           error,
           OperationType.WRITE,
-          `categories/${category.id}`
+          `categories/${cleanedCategory.id}`
         );
       }
     }
@@ -754,21 +828,24 @@ export default function App() {
   };
 
   const handleAdminSaveHomeRow = async (rowToSave: HomeRow) => {
-    setHomeRows((prev) => {
-      const exists = prev.some((r) => r.id === rowToSave.id);
+    const cleanedRow = stripUndefined(rowToSave);
+    const nextRows = (() => {
+      const exists = homeRows.some((r) => r.id === cleanedRow.id);
       const next = exists
-        ? prev.map((r) => (r.id === rowToSave.id ? rowToSave : r))
-        : [...prev, rowToSave];
+        ? homeRows.map((r) => (r.id === cleanedRow.id ? cleanedRow : r))
+        : [...homeRows, cleanedRow];
       return next.sort((a, b) => a.ordem - b.ordem);
-    });
+    })();
+    setHomeRows(nextRows);
+
     if (firebaseUser && isAdmin) {
       try {
-        await setDoc(doc(db, 'home_rows', rowToSave.id), rowToSave);
+        await setDoc(doc(db, 'home_rows', cleanedRow.id), cleanedRow);
       } catch (error) {
         handleFirestoreError(
           error,
           OperationType.WRITE,
-          `home_rows/${rowToSave.id}`
+          `home_rows/${cleanedRow.id}`
         );
       }
     }
@@ -792,10 +869,11 @@ export default function App() {
   const handleAdminSavePlatformSettings = async (
     nextSettings: PlatformSettings
   ) => {
-    setPlatformSettings(nextSettings);
+    const cleanedSettings = stripUndefined(nextSettings);
+    setPlatformSettings(cleanedSettings);
     if (firebaseUser && isAdmin) {
       try {
-        await setDoc(doc(db, 'settings', 'platform'), nextSettings, {
+        await setDoc(doc(db, 'settings', 'platform'), cleanedSettings, {
           merge: true,
         });
       } catch (error) {
@@ -809,22 +887,23 @@ export default function App() {
   };
 
   const handleAdminUpdateUserProfile = async (updatedUser: UserProfile) => {
+    const cleanedUser = stripUndefined(updatedUser);
     setRegisteredUsers((prev) =>
-      prev.map((u) => (u.uid === updatedUser.uid ? updatedUser : u))
+      prev.map((u) => (u.uid === cleanedUser.uid ? cleanedUser : u))
     );
-    if (userProfile?.uid === updatedUser.uid) {
-      setUserProfile(updatedUser);
+    if (userProfile?.uid === cleanedUser.uid) {
+      setUserProfile(cleanedUser);
     }
     if (firebaseUser && isAdmin) {
       try {
-        await setDoc(doc(db, 'users', updatedUser.uid), updatedUser, {
+        await setDoc(doc(db, 'users', cleanedUser.uid), cleanedUser, {
           merge: true,
         });
       } catch (error) {
         handleFirestoreError(
           error,
           OperationType.WRITE,
-          `users/${updatedUser.uid}`
+          `users/${cleanedUser.uid}`
         );
       }
     }
@@ -847,20 +926,22 @@ export default function App() {
     [books]
   );
 
-  // Featured carousel books (respects platformSettings.heroBookIds if configured, otherwise book.destaque)
+  // Featured carousel books (combines platformSettings.heroBookIds and books marked with book.destaque)
   const featuredBooks = useMemo(() => {
-    if (
-      platformSettings.heroBookIds &&
-      platformSettings.heroBookIds.length > 0
-    ) {
-      const manualHero = platformSettings.heroBookIds
-        .map((id) => activeBooks.find((b) => b.id === id))
-        .filter((b): b is Book => Boolean(b));
-      if (manualHero.length > 0) return manualHero;
+    const manualHero = (platformSettings.heroBookIds || [])
+      .map((id) => activeBooks.find((b) => b.id === id))
+      .filter((b): b is Book => Boolean(b));
+
+    const highlighted = activeBooks.filter(
+      (b) => b.destaque && !manualHero.some((m) => m.id === b.id)
+    );
+
+    const combinedFeatured = [...manualHero, ...highlighted];
+    if (combinedFeatured.length > 0) {
+      return combinedFeatured.slice(0, 10);
     }
-    const highlighted = activeBooks.filter((b) => b.destaque);
-    const others = activeBooks.filter((b) => !b.destaque);
-    return [...highlighted, ...others].slice(0, 10);
+
+    return activeBooks.slice(0, 10);
   }, [activeBooks, platformSettings.heroBookIds]);
 
   // Rotate Hero automatically when on Home
@@ -1013,18 +1094,71 @@ export default function App() {
     [homeRows, platformSettings.showTop10]
   );
 
-  // Header & Categories Box List (dynamic from platformSettings + customCategories)
+  // Header & Categories Box List (dynamic from platformSettings + customCategories + all genres from activeBooks)
   const effectiveCategoriesList = useMemo(() => {
     const base =
       platformSettings.headerCategories &&
       platformSettings.headerCategories.length > 0
         ? platformSettings.headerCategories
         : BOOK_CATEGORIES_LIST;
-    const extraGenres = customCategories
-      .map((c) => c.generoFiltro)
-      .filter((g) => g && !base.includes(g));
-    return [...base, ...extraGenres];
-  }, [platformSettings.headerCategories, customCategories]);
+
+    const seen = new Set(base.map((c) => c.toLowerCase()));
+    const result = [...base];
+
+    customCategories.forEach((c) => {
+      const g = (c.generoFiltro || c.titulo || '').trim();
+      if (g && !seen.has(g.toLowerCase())) {
+        seen.add(g.toLowerCase());
+        result.push(g);
+      }
+    });
+
+    activeBooks.forEach((b) => {
+      (b.generos || []).forEach((g) => {
+        const trimmed = g.trim();
+        if (trimmed && !seen.has(trimmed.toLowerCase())) {
+          seen.add(trimmed.toLowerCase());
+          result.push(trimmed);
+        }
+      });
+    });
+
+    return result;
+  }, [platformSettings.headerCategories, customCategories, activeBooks]);
+
+  // Extra genre shelves on Home for any book genre added in Admin that doesn't already have an explicit HomeRow or CustomCategory
+  const extraBookGenreShelves = useMemo(() => {
+    const coveredGenres = new Set<string>();
+    activeHomeRows.forEach((r) => {
+      if (r.tipo === 'genero') {
+        coveredGenres.add((r.generoFiltro || r.titulo).trim().toLowerCase());
+      }
+    });
+    customCategories.forEach((c) => {
+      coveredGenres.add((c.generoFiltro || c.titulo).trim().toLowerCase());
+    });
+
+    const dynamicGenres: string[] = [];
+    activeBooks.forEach((b) => {
+      (b.generos || []).forEach((g) => {
+        const trimmed = g.trim();
+        if (
+          trimmed &&
+          !coveredGenres.has(trimmed.toLowerCase()) &&
+          !dynamicGenres.some((dg) => dg.toLowerCase() === trimmed.toLowerCase())
+        ) {
+          dynamicGenres.push(trimmed);
+        }
+      });
+    });
+
+    return dynamicGenres.map((genre) => ({
+      genre,
+      books: activeBooks.filter((b) =>
+        b.generos.some((g) => g.toLowerCase() === genre.toLowerCase())
+      ),
+    }));
+  }, [activeHomeRows, customCategories, activeBooks]);
 
   // Books filtered by the category selected in the Categories Box
   const selectedCategoryBooks = useMemo(() => {
@@ -1159,7 +1293,11 @@ export default function App() {
                   {activeHomeRows.map((row) => (
                     <BookRow
                       key={row.id}
-                      title={row.titulo}
+                      title={
+                        row.tipo === 'top10' && platformSettings.top10Title
+                          ? platformSettings.top10Title
+                          : row.titulo
+                      }
                       books={getBooksForHomeRow(row)}
                       onSelectBook={openBookDetail}
                       savedBookIds={[]}
@@ -1179,6 +1317,17 @@ export default function App() {
                             g.toLowerCase() === cat.generoFiltro.toLowerCase()
                         )
                       )}
+                      onSelectBook={openBookDetail}
+                      savedBookIds={[]}
+                      onToggleSave={() => {}}
+                    />
+                  ))}
+
+                  {extraBookGenreShelves.map((shelf) => (
+                    <BookRow
+                      key={`auto-genre-${shelf.genre}`}
+                      title={shelf.genre}
+                      books={shelf.books}
                       onSelectBook={openBookDetail}
                       savedBookIds={[]}
                       onToggleSave={() => {}}
