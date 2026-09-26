@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
+import { Readable } from 'node:stream';
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
@@ -390,6 +391,75 @@ app.get('/api/health', (_req, res) => {
     ok: true,
     service: 'livroflix-api',
   });
+});
+
+app.get('/api/github/pdf-stream', async (req, res) => {
+  try {
+    const targetUrl = String(req.query.url || '').trim();
+    if (!targetUrl) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Parâmetro url ausente.',
+      });
+    }
+
+    let parsed;
+    try {
+      parsed = new URL(targetUrl);
+    } catch {
+      return res.status(400).json({
+        ok: false,
+        error: 'URL inválida.',
+      });
+    }
+
+    const isAllowedHost =
+      parsed.protocol === 'https:' &&
+      (parsed.hostname === 'github.com' ||
+        parsed.hostname.endsWith('.githubusercontent.com'));
+
+    if (!isAllowedHost) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Origem não autorizada para leitura de PDF.',
+      });
+    }
+
+    const upstream = await fetch(parsed.toString(), {
+      method: 'GET',
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'livroflix-api-pdf-reader',
+        Accept: 'application/pdf,application/octet-stream,*/*',
+      },
+    });
+
+    if (!upstream.ok || !upstream.body) {
+      return res.status(upstream.status || 502).json({
+        ok: false,
+        error: `Falha ao obter o PDF remoto (HTTP ${upstream.status}).`,
+      });
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+
+    const contentLength = upstream.headers.get('content-length');
+    if (contentLength) {
+      res.setHeader('Content-Length', contentLength);
+    }
+
+    Readable.fromWeb(upstream.body).pipe(res);
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : 'Erro interno ao transmitir o PDF.',
+    });
+  }
 });
 
 app.post(

@@ -57,6 +57,7 @@ import { BookReader } from './components/BookReader';
 import { ReadingFormatModal } from './components/ReadingFormatModal';
 import { PdfReaderView } from './components/PdfReaderView';
 import { SearchView } from './components/ExploreAndSearch';
+import { downloadBookPdf } from './utils/pdfUtils';
 import {
   MyLibraryView,
   ProfileView,
@@ -543,12 +544,7 @@ export default function App() {
   };
 
   const handleToggleDownload = (book: Book) => {
-    const current = getOrInitUserItem(book);
-    saveUserBookItem({
-      ...current,
-      isDownloaded: !current.isDownloaded,
-      ultimoAcesso: new Date().toISOString(),
-    });
+    downloadBookPdf(book).catch(() => {});
   };
 
   const handleChangeStatus = (book: Book, status: ReadingStatus) => {
@@ -588,13 +584,23 @@ export default function App() {
     await saveUserBookItem(updated);
   };
 
-  const handleSaveReadingProgress = (book: Book, paginaAtual: number) => {
+  const handleSaveReadingProgress = (
+    book: Book,
+    paginaAtual: number,
+    totalPaginasOverride?: number
+  ) => {
+    const effectiveTotalPages = Math.max(
+      1,
+      totalPaginasOverride && totalPaginasOverride > 0
+        ? totalPaginasOverride
+        : book.paginas
+    );
     const current = getOrInitUserItem(book);
     const progresso = Math.min(
       100,
-      Math.max(1, Math.round((paginaAtual / Math.max(1, book.paginas)) * 100))
+      Math.max(1, Math.round((paginaAtual / effectiveTotalPages) * 100))
     );
-    const isFinished = paginaAtual >= book.paginas;
+    const isFinished = paginaAtual >= effectiveTotalPages;
     const nextMinutes = (current.minutosLidos || 0) + 1;
 
     saveUserBookItem({
@@ -602,7 +608,7 @@ export default function App() {
       inMyList: true,
       status: isFinished ? 'concluido' : 'lendo',
       paginaAtual,
-      totalPaginas: book.paginas,
+      totalPaginas: effectiveTotalPages,
       progresso: isFinished ? 100 : progresso,
       minutosLidos: nextMinutes,
       ultimoAcesso: new Date().toISOString(),
@@ -703,12 +709,11 @@ export default function App() {
   };
 
   /**
-   * Ao clicar em [ LER LIVRO ], abre a seleção de formato ("Como você quer ler?")
-   * sem abrir o PDF imediatamente.
+   * Ao clicar em [ LER LIVRO ], abre diretamente o leitor de PDF interno (provisório),
+   * sem precisar escolher opção no modal.
    */
   const openBookReader = (book: Book) => {
-    setSelectedBookId(book.id);
-    setFormatModalBookId(book.id);
+    handleSelectReadingFormat(book, 'pdf');
   };
 
   /**
@@ -716,9 +721,20 @@ export default function App() {
    * abre a rota/componente correspondente ao formato escolhido.
    */
   const handleSelectReadingFormat = (book: Book, format: ReadingFormat) => {
+    if (
+      activeView !== 'livro-detalhe' &&
+      activeView !== 'leitor' &&
+      activeView !== 'leitor-pdf'
+    ) {
+      setPreviousView(activeView);
+    }
     setFormatModalBookId(null);
     setSelectedBookId(book.id);
     setSelectedReadingFormat(format);
+    if (format === 'pdf') {
+      setActiveView('leitor-pdf');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   const handleNavigate = (view: ActiveView) => {
@@ -1052,13 +1068,7 @@ export default function App() {
     [userLibrary, activeBookIdsSet]
   );
 
-  const downloadsCount = useMemo(
-    () =>
-      Object.values(userLibrary).filter(
-        (i) => activeBookIdsSet.has(i.bookId) && i.isDownloaded
-      ).length,
-    [userLibrary, activeBookIdsSet]
-  );
+  const downloadsCount = 0;
 
   // Personalized Recommendations Engine based on real user library
   const personalizedRecommendationShelf = useMemo(() => {
@@ -1246,13 +1256,18 @@ export default function App() {
     [books, formatModalBookId]
   );
 
-  // Rota preparada para o Leitor de PDF (format = "pdf")
+  // Rota do Leitor de PDF interno do LIVROFLIX (format = "pdf")
   if (activeView === 'leitor-pdf' && selectedBook) {
     return (
       <PdfReaderView
         book={selectedBook}
         format={selectedReadingFormat}
-        onClose={() => setActiveView(previousView)}
+        userItem={userLibrary[selectedBook.id]}
+        onSaveProgress={handleSaveReadingProgress}
+        onClose={() => {
+          setActiveView('livro-detalhe');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
       />
     );
   }

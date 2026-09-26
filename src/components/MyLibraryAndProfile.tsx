@@ -12,11 +12,12 @@ import {
   ShieldCheck,
   Sparkles,
   Download,
-  FileDown,
   HardDrive,
+  Loader2,
 } from 'lucide-react';
 import { Book, PlatformSettings, ReadingStatus, UserBookItem, UserProfile } from '../types';
 import { BookCover } from './BookCover';
+import { downloadBookPdf } from '../utils/pdfUtils';
 
 interface DownloadsViewProps {
   books: Book[];
@@ -29,39 +30,29 @@ interface DownloadsViewProps {
 
 export const DownloadsView: React.FC<DownloadsViewProps> = ({
   books,
-  userLibrary,
   onSelectBook,
-  onReadBook,
-  onToggleDownload,
   platformSettings,
 }) => {
   const activeBooks = books.filter((b) => b.status === 'ativo');
-  const downloadedBooks = activeBooks.filter(
-    (b) => userLibrary[b.id]?.isDownloaded
+  const [downloadingBookId, setDownloadingBookId] = useState<string | null>(
+    null
   );
-  const availableToDownload = activeBooks.filter(
-    (b) => !userLibrary[b.id]?.isDownloaded
-  );
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
-  const handleExportBookFile = (book: Book) => {
-    const chaptersContent = (book.capitulos || [])
-      .map(
-        (c) =>
-          `\n========================================\n${c.titulo}\n========================================\n\n${c.conteudo}\n`
-      )
-      .join('\n');
-
-    const fullText = `LIVROFLIX — EDIÇÃO DIGITAL OFFLINE\nTítulo: ${book.titulo}\nAutor: ${book.autor}\nEditora: ${book.editora} (${book.ano})\nGêneros: ${book.generos.join(', ')}\nExtensão: ${book.paginas} páginas\n\nSINOPSE:\n${book.descricao}\n${chaptersContent}`;
-
-    const blob = new Blob([fullText], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${book.id}-livroflix.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  const handleDirectPdfDownload = async (book: Book) => {
+    setDownloadError(null);
+    setDownloadingBookId(book.id);
+    try {
+      await downloadBookPdf(book);
+    } catch (err) {
+      setDownloadError(
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível baixar o PDF deste livro.'
+      );
+    } finally {
+      setDownloadingBookId(null);
+    }
   };
 
   return (
@@ -72,14 +63,14 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({
           <div>
             <div className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-[#60A5FA] mb-2">
               <Download className="w-3.5 h-3.5" />
-              <span>Biblioteca Offline</span>
+              <span>Download Direto em PDF</span>
             </div>
             <h1 className="font-display text-3xl sm:text-5xl font-extrabold text-white">
-              {platformSettings?.downloadsTitle || 'Meus Downloads'}
+              {platformSettings?.downloadsTitle || 'Downloads'}
             </h1>
             <p className="mt-2 text-sm sm:text-base text-blue-200/75">
               {platformSettings?.downloadsSubtitle ||
-                'Acesse os livros salvos para leitura offline imediata ou baixe o arquivo digital no seu dispositivo.'}
+                'Clique em baixar em qualquer livro abaixo para fazer o download automático do arquivo PDF original.'}
             </p>
           </div>
 
@@ -87,145 +78,82 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({
             <HardDrive className="w-5 h-5 text-[#60A5FA]" />
             <div>
               <span className="text-[11px] uppercase tracking-wider text-blue-200/70 block">
-                Obras salvas no dispositivo
+                Catálogo disponível
               </span>
               <span className="font-mono-num text-sm font-bold text-white">
-                {downloadedBooks.length}{' '}
-                {downloadedBooks.length === 1 ? 'livro disponível' : 'livros disponíveis'}
+                {activeBooks.length}{' '}
+                {activeBooks.length === 1
+                  ? 'livro para baixar'
+                  : 'livros para baixar'}
               </span>
             </div>
           </div>
         </div>
 
-        {/* Downloaded Books Grid */}
-        {downloadedBooks.length === 0 ? (
-          <div className="rounded-2xl bg-[#071426] border border-blue-400/20 p-10 text-center max-w-xl mx-auto">
-            <Download className="w-10 h-10 text-[#60A5FA] mx-auto mb-3 opacity-80" />
-            <h3 className="font-display text-xl font-bold text-white">
-              Nenhum livro baixado no momento
-            </h3>
-            <p className="text-sm text-blue-200/75 mt-1">
-              Escolha qualquer livro abaixo para salvar em seus Downloads e ler offline quando quiser.
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-            {downloadedBooks.map((book) => {
-              const item = userLibrary[book.id];
-              const progress = item?.progresso || 0;
-              const page = item?.paginaAtual || 1;
-              return (
-                <div
-                  key={book.id}
-                  className="flex gap-4 rounded-2xl bg-[#071426] border border-blue-400/20 hover:border-[#60A5FA]/60 p-4 transition-all"
-                >
-                  <div
-                    onClick={() => onSelectBook(book)}
-                    className="w-24 sm:w-28 flex-shrink-0 cursor-pointer"
-                  >
-                    <BookCover book={book} />
-                  </div>
-
-                  <div className="flex-1 min-w-0 flex flex-col justify-between">
-                    <div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/20 border border-blue-400/35 px-2.5 py-0.5 text-[10px] font-bold uppercase text-blue-300">
-                          <CheckCircle2 className="w-3 h-3" /> Baixado • {book.paginas} págs.
-                        </span>
-
-                        <button
-                          type="button"
-                          onClick={() => onToggleDownload(book)}
-                          title="Remover dos Downloads"
-                          className="text-blue-300/60 hover:text-rose-400 p-1 cursor-pointer"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      <h3
-                        onClick={() => onSelectBook(book)}
-                        className="font-display text-lg font-extrabold text-white hover:text-[#60A5FA] cursor-pointer truncate mt-1.5"
-                      >
-                        {book.titulo}
-                      </h3>
-                      <p className="text-xs text-blue-200/70 truncate">{book.autor}</p>
-
-                      <div className="mt-3">
-                        <div className="flex items-center justify-between text-[11px] font-mono-num text-blue-200/75 mb-1">
-                          <span>
-                            Pág. {page} de {book.paginas}
-                          </span>
-                          <span className="text-[#60A5FA] font-bold">{progress}%</span>
-                        </div>
-                        <div className="h-1.5 w-full rounded-full bg-blue-950 overflow-hidden">
-                          <div
-                            className="h-full bg-[#3B82F6]"
-                            style={{ width: `${progress}%` }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 pt-3 border-t border-blue-400/15 flex items-center justify-between gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleExportBookFile(book)}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-blue-950/70 hover:bg-blue-900/70 border border-blue-400/20 px-3 py-1.5 text-xs font-semibold text-blue-100 transition-colors cursor-pointer"
-                      >
-                        <FileDown className="w-3.5 h-3.5 text-[#60A5FA]" />
-                        <span>Salvar arquivo</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => onReadBook(book)}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-[#2563EB] hover:bg-[#3B82F6] px-3.5 py-1.5 text-xs font-extrabold text-white transition-colors cursor-pointer"
-                      >
-                        <Play className="w-3.5 h-3.5 fill-white" />
-                        <span>Ler offline</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+        {downloadError && (
+          <div className="rounded-xl bg-rose-500/10 border border-rose-500/30 p-4 text-xs sm:text-sm text-rose-200">
+            {downloadError}
           </div>
         )}
 
-        {/* Quick Catalog Section to Download More Books */}
-        {availableToDownload.length > 0 && (
-          <div className="pt-6 border-t border-blue-400/15">
+        {/* Books Grid for Direct PDF Download */}
+        {activeBooks.length === 0 ? (
+          <div className="rounded-2xl bg-[#071426] border border-blue-400/20 p-10 text-center max-w-xl mx-auto">
+            <Download className="w-10 h-10 text-[#60A5FA] mx-auto mb-3 opacity-80" />
+            <h3 className="font-display text-xl font-bold text-white">
+              Nenhum livro disponível no catálogo
+            </h3>
+            <p className="text-sm text-blue-200/75 mt-1">
+              Assim que livros forem cadastrados na plataforma, você poderá baixar o PDF diretamente por aqui.
+            </p>
+          </div>
+        ) : (
+          <div>
             <h2 className="font-display text-xl sm:text-2xl font-extrabold text-white mb-4">
-              Disponíveis para Download Rápido
+              Disponíveis para Download em PDF
             </h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-              {availableToDownload.slice(0, 12).map((book) => (
-                <div
-                  key={book.id}
-                  className="rounded-xl bg-[#071426] border border-blue-400/20 p-3 flex flex-col justify-between gap-3"
-                >
+              {activeBooks.map((book) => {
+                const isDownloading = downloadingBookId === book.id;
+                return (
                   <div
-                    onClick={() => onSelectBook(book)}
-                    className="cursor-pointer"
+                    key={book.id}
+                    className="rounded-xl bg-[#071426] border border-blue-400/20 p-3 flex flex-col justify-between gap-3"
                   >
-                    <BookCover book={book} />
-                    <h4 className="font-display text-sm font-bold text-white truncate mt-2">
-                      {book.titulo}
-                    </h4>
-                    <p className="text-[11px] text-blue-200/70 truncate">{book.autor}</p>
-                  </div>
+                    <div
+                      onClick={() => onSelectBook(book)}
+                      className="cursor-pointer"
+                    >
+                      <BookCover book={book} />
+                      <h4 className="font-display text-sm font-bold text-white truncate mt-2">
+                        {book.titulo}
+                      </h4>
+                      <p className="text-[11px] text-blue-200/70 truncate">
+                        {book.autor}
+                      </p>
+                    </div>
 
-                  <button
-                    type="button"
-                    onClick={() => onToggleDownload(book)}
-                    className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-blue-950/80 hover:bg-[#2563EB] text-blue-100 hover:text-white border border-blue-400/20 py-2 text-xs font-bold transition-colors cursor-pointer"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Baixar</span>
-                  </button>
-                </div>
-              ))}
+                    <button
+                      type="button"
+                      disabled={isDownloading}
+                      onClick={() => handleDirectPdfDownload(book)}
+                      className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-60 text-white py-2 text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      {isDownloading ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Baixando...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Baixar</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
