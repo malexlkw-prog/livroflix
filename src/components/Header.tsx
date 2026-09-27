@@ -5,6 +5,7 @@ import {
   ShieldCheck,
   ChevronDown,
   Crown,
+  MessageCircle,
 } from 'lucide-react';
 import { ActiveView, PlatformSettings, UserProfile } from '../types';
 import { LivroflixLogo } from './LivroflixLogo';
@@ -24,6 +25,8 @@ interface HeaderProps {
   downloadsCount: number;
   myListCount: number;
   unreadCommunityCount?: number;
+  unreadMessagesCount?: number;
+  onOpenMessages?: () => void;
   categoriesList?: string[];
   platformSettings?: PlatformSettings;
 }
@@ -56,6 +59,8 @@ export const Header: React.FC<HeaderProps> = ({
   downloadsCount,
   myListCount,
   unreadCommunityCount = 0,
+  unreadMessagesCount = 0,
+  onOpenMessages,
   categoriesList = BOOK_CATEGORIES_LIST,
   platformSettings,
 }) => {
@@ -234,7 +239,7 @@ export const Header: React.FC<HeaderProps> = ({
             </nav>
           </div>
 
-          {/* Right: Search Icon, Premium Crown Button & User Profile */}
+          {/* Right: Search Icon, Direct Messages (💬), Premium Crown Button & User Profile */}
           <div className="flex items-center gap-2 sm:gap-3">
             {showSearchButton && (
               <button
@@ -252,6 +257,27 @@ export const Header: React.FC<HeaderProps> = ({
                 }`}
               >
                 <Search className="w-4 h-4 stroke-[2.2]" />
+              </button>
+            )}
+
+            {/* Ícone de Mensagens Diretas (💬) */}
+            {onOpenMessages && (
+              <button
+                type="button"
+                onClick={() => {
+                  setCatDropdownOpen(false);
+                  onOpenMessages();
+                }}
+                aria-label="Mensagens"
+                title="Mensagens"
+                className="relative flex h-9 w-9 items-center justify-center rounded-full text-blue-100 hover:text-white hover:bg-blue-500/15 transition-colors cursor-pointer"
+              >
+                <MessageCircle className="w-4 h-4 stroke-[2.2]" />
+                {unreadMessagesCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[#2563EB] px-1 text-[10px] font-mono-num font-bold text-white shadow-md">
+                    {unreadMessagesCount > 99 ? '99+' : unreadMessagesCount}
+                  </span>
+                )}
               </button>
             )}
 

@@ -133,6 +133,7 @@ export interface UserProfile {
   nome: string;
   displayName?: string;
   username?: string;
+  usernameChangeHistory?: string[];
   bio?: string;
   email: string;
   foto: string;
@@ -350,6 +351,36 @@ export interface BookReview {
   rating?: number;
   createdAt: string;
   updatedAt?: string;
+}
+
+export interface DirectConversationParticipantMeta {
+  displayName: string;
+  username: string;
+  photoURL?: string;
+}
+
+export interface DirectConversation {
+  id: string;
+  participants: string[];
+  lastMessage: string;
+  lastMessageAt: string;
+  lastSenderId?: string;
+  unreadBy?: string[];
+  unreadCounts?: Record<string, number>;
+  participantProfiles?: Record<string, DirectConversationParticipantMeta>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DirectMessage {
+  id: string;
+  conversationId: string;
+  senderId: string;
+  recipientId: string;
+  text: string;
+  createdAt: string;
+  read: boolean;
+  hiddenFor?: string[];
 }
 
 export type ActiveView =

@@ -887,6 +887,113 @@ const BIO_MAX_LENGTH = 160;
 const NAME_MAX_LENGTH = 60;
 const USERNAME_MIN_LENGTH = 3;
 const USERNAME_MAX_LENGTH = 30;
+export const USERNAME_MAX_CHANGES_PER_WINDOW = 2;
+export const USERNAME_CHANGE_WINDOW_DAYS = 15;
+export const USERNAME_CHANGE_WINDOW_MS =
+  USERNAME_CHANGE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+export function getLocalUsernameChangeHistory(uid: string): string[] {
+  if (!uid) return [];
+  try {
+    const raw = localStorage.getItem(`livroflix_username_changes_${uid}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalUsernameChangeHistory(
+  uid: string,
+  timestamps: string[]
+): void {
+  if (!uid) return;
+  try {
+    localStorage.setItem(
+      `livroflix_username_changes_${uid}`,
+      JSON.stringify(timestamps.slice(-5))
+    );
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function getUsernameChangeStatus(
+  userProfile?: UserProfile | null,
+  nowMs = Date.now()
+): {
+  changesInWindow: number;
+  remainingChanges: number;
+  canChange: boolean;
+  daysUntilAvailable: number;
+  nextAvailableDateFormatted: string;
+  validTimestampsIso: string[];
+} {
+  const profileHistory = Array.isArray(userProfile?.usernameChangeHistory)
+    ? userProfile!.usernameChangeHistory.filter(
+        (item): item is string => typeof item === 'string'
+      )
+    : [];
+  const localHistory = userProfile?.uid
+    ? getLocalUsernameChangeHistory(userProfile.uid)
+    : [];
+
+  const mergedSet = new Set<string>([...profileHistory, ...localHistory]);
+  const validEntries: { iso: string; ms: number }[] = [];
+
+  for (const iso of mergedSet) {
+    const ms = new Date(iso).getTime();
+    if (
+      !Number.isNaN(ms) &&
+      ms <= nowMs + 60000 &&
+      nowMs - ms < USERNAME_CHANGE_WINDOW_MS
+    ) {
+      validEntries.push({ iso: new Date(ms).toISOString(), ms });
+    }
+  }
+
+  validEntries.sort((a, b) => a.ms - b.ms);
+  const validTimestampsIso = validEntries.map((e) => e.iso);
+  const changesInWindow = validEntries.length;
+  const remainingChanges = Math.max(
+    0,
+    USERNAME_MAX_CHANGES_PER_WINDOW - changesInWindow
+  );
+  const canChange = remainingChanges > 0;
+
+  let daysUntilAvailable = 0;
+  let nextAvailableDateFormatted = '';
+
+  if (!canChange && validEntries.length >= USERNAME_MAX_CHANGES_PER_WINDOW) {
+    const unlockEntry =
+      validEntries[validEntries.length - USERNAME_MAX_CHANGES_PER_WINDOW];
+    const unlockMs = unlockEntry.ms + USERNAME_CHANGE_WINDOW_MS;
+    daysUntilAvailable = Math.max(
+      1,
+      Math.ceil((unlockMs - nowMs) / (24 * 60 * 60 * 1000))
+    );
+    nextAvailableDateFormatted = new Date(unlockMs).toLocaleDateString(
+      'pt-BR',
+      {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      }
+    );
+  }
+
+  return {
+    changesInWindow,
+    remainingChanges,
+    canChange,
+    daysUntilAvailable,
+    nextAvailableDateFormatted,
+    validTimestampsIso,
+  };
+}
 
 export function sanitizeUsernameInput(raw: string): string {
   return raw
@@ -1309,6 +1416,26 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       return;
     }
 
+    const currentNormalizedUsername = (
+      userProfile.username || generateDefaultUsername(userProfile)
+    )
+      .replace(/^@+/, '')
+      .toLowerCase();
+    const isChangingUsername =
+      usernameCheck.normalized !== currentNormalizedUsername;
+    const changeStatus = getUsernameChangeStatus(userProfile);
+
+    if (isChangingUsername && !changeStatus.canChange) {
+      setEditError(
+        `Você só pode mudar o @username 2 vezes a cada 15 dias. Próxima alteração disponível em ${
+          changeStatus.daysUntilAvailable
+        } ${changeStatus.daysUntilAvailable === 1 ? 'dia' : 'dias'} (${
+          changeStatus.nextAvailableDateFormatted
+        }).`
+      );
+      return;
+    }
+
     const cleanBio = editBio.trim();
     if (cleanBio.length > BIO_MAX_LENGTH) {
       setEditError(`A bio pode ter no máximo ${BIO_MAX_LENGTH} caracteres.`);
@@ -1502,6 +1629,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   }, [userProfile?.profileBadges, effectiveUnlockedBadges]);
 
   const liveUsernameValidation = validateUsernameFormat(editUsername);
+  const usernameChangeStatus = getUsernameChangeStatus(userProfile);
 
   // ABA DEDICADA DE CONFIGURAÇÕES (Editar perfil, Personalizar perfil e Sair da conta)
   if (isSettingsOpen && isAuthenticated && userProfile) {
@@ -1711,13 +1839,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                       id="settings-edit-username"
                       type="text"
                       required
+                      disabled={!usernameChangeStatus.canChange}
                       maxLength={USERNAME_MAX_LENGTH}
                       value={editUsername}
                       onChange={(e) =>
                         setEditUsername(sanitizeUsernameInput(e.target.value))
                       }
                       placeholder="nomeusuario"
-                      className={`w-full rounded-xl bg-[#040D1A] border pl-9 pr-4 py-3 text-sm text-white placeholder-blue-300/35 focus:outline-none transition-colors ${
+                      className={`w-full rounded-xl bg-[#040D1A] border pl-9 pr-4 py-3 text-sm text-white placeholder-blue-300/35 focus:outline-none transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
                         editUsername.length > 0 && !liveUsernameValidation.valid
                           ? 'border-amber-400/60 focus:border-amber-400'
                           : 'border-blue-400/25 focus:border-[#60A5FA]'
@@ -1733,6 +1862,23 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                       Seu identificador único no LIVROFLIX: @{editUsername || 'nomeusuario'}
                     </p>
                   )}
+                  <p
+                    className={`mt-1 text-xs ${
+                      usernameChangeStatus.canChange
+                        ? 'text-blue-200/70'
+                        : 'text-amber-300 font-semibold'
+                    }`}
+                  >
+                    {usernameChangeStatus.canChange
+                      ? `Você só pode mudar o @username 2 vezes a cada 15 dias (${usernameChangeStatus.remainingChanges}/2 alterações restantes).`
+                      : `Limite atingido: você já mudou o @username 2 vezes nos últimos 15 dias. Próxima alteração em ${
+                          usernameChangeStatus.daysUntilAvailable
+                        } ${
+                          usernameChangeStatus.daysUntilAvailable === 1
+                            ? 'dia'
+                            : 'dias'
+                        } (${usernameChangeStatus.nextAvailableDateFormatted}).`}
+                  </p>
                 </div>
 
                 {/* Field: Bio */}
@@ -2203,13 +2349,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                       id="profile-edit-username"
                       type="text"
                       required
+                      disabled={!usernameChangeStatus.canChange}
                       maxLength={USERNAME_MAX_LENGTH}
                       value={editUsername}
                       onChange={(e) =>
                         setEditUsername(sanitizeUsernameInput(e.target.value))
                       }
                       placeholder="nomeusuario"
-                      className={`w-full rounded-xl bg-[#040D1A] border pl-9 pr-4 py-3 text-sm text-white placeholder-blue-300/35 focus:outline-none transition-colors ${
+                      className={`w-full rounded-xl bg-[#040D1A] border pl-9 pr-4 py-3 text-sm text-white placeholder-blue-300/35 focus:outline-none transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
                         editUsername.length > 0 && !liveUsernameValidation.valid
                           ? 'border-amber-400/60 focus:border-amber-400'
                           : 'border-blue-400/25 focus:border-[#60A5FA]'
@@ -2225,6 +2372,23 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                       Seu identificador único no LIVROFLIX: @{editUsername || 'nomeusuario'}
                     </p>
                   )}
+                  <p
+                    className={`mt-1 text-[11px] ${
+                      usernameChangeStatus.canChange
+                        ? 'text-blue-200/70'
+                        : 'text-amber-300 font-semibold'
+                    }`}
+                  >
+                    {usernameChangeStatus.canChange
+                      ? `Você só pode mudar o @username 2 vezes a cada 15 dias (${usernameChangeStatus.remainingChanges}/2 alterações restantes).`
+                      : `Limite atingido: você já mudou o @username 2 vezes nos últimos 15 dias. Próxima alteração em ${
+                          usernameChangeStatus.daysUntilAvailable
+                        } ${
+                          usernameChangeStatus.daysUntilAvailable === 1
+                            ? 'dia'
+                            : 'dias'
+                        } (${usernameChangeStatus.nextAvailableDateFormatted}).`}
+                  </p>
                 </div>
 
                 {/* Field: Bio */}

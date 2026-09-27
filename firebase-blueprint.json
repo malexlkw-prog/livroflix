@@ -56,6 +56,10 @@
         "nome": { "type": "string", "maxLength": 80 },
         "displayName": { "type": "string", "maxLength": 80 },
         "username": { "type": "string", "maxLength": 30, "pattern": "^[a-z0-9._]{3,30}$" },
+        "usernameChangeHistory": {
+          "type": "array",
+          "description": "ISO timestamps of recent username changes (limited to 2 changes every 15 days)"
+        },
         "bio": { "type": "string", "maxLength": 300 },
         "email": { "type": "string" },
         "foto": { "type": "string" },
@@ -319,6 +323,40 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["id", "bookId", "userId", "authorName", "authorUsername", "text", "createdAt"]
+    },
+    "DirectConversation": {
+      "title": "DirectConversation",
+      "description": "Private 1-on-1 direct message conversation between two community users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "participants": { "type": "array", "description": "Two participant UIDs" },
+        "lastMessage": { "type": "string", "maxLength": 1000 },
+        "lastMessageAt": { "type": "string" },
+        "lastSenderId": { "type": "string" },
+        "unreadBy": { "type": "array" },
+        "unreadCounts": { "type": "object" },
+        "participantProfiles": { "type": "object" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "participants", "lastMessage", "lastMessageAt", "createdAt", "updatedAt"]
+    },
+    "DirectMessage": {
+      "title": "DirectMessage",
+      "description": "Individual text message inside a private conversation subcollection",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "conversationId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "recipientId": { "type": "string" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "createdAt": { "type": "string" },
+        "read": { "type": "boolean" },
+        "hiddenFor": { "type": "array" }
+      },
+      "required": ["id", "conversationId", "senderId", "recipientId", "text", "createdAt", "read"]
     }
   },
   "firestore": {
@@ -377,6 +415,14 @@
     "/book_reviews/{reviewId}": {
       "schema": { "$ref": "#/entities/BookReview" },
       "description": "Literary reviews linked to specific catalog books (livro -> reviews -> usuario)"
+    },
+    "/conversations/{conversationId}": {
+      "schema": { "$ref": "#/entities/DirectConversation" },
+      "description": "Private 1-on-1 conversations accessible exclusively to the two participants"
+    },
+    "/conversations/{conversationId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/DirectMessage" },
+      "description": "Private text messages within a conversation accessible exclusively to its two participants"
     },
     "/users/{userId}/library/{bookId}": {
       "schema": { "$ref": "#/entities/UserBookItem" },

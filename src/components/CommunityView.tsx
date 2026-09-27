@@ -951,6 +951,8 @@ interface CommunityViewProps {
   ) => Promise<void>;
   onNavigateProfile: () => void;
   onRefreshFeed?: () => Promise<void>;
+  unreadMessagesCount?: number;
+  onOpenMessages?: (targetUserId?: string) => void;
 }
 
 const FEED_PAGE_SIZE = 10;
@@ -981,6 +983,8 @@ export const CommunityView: React.FC<CommunityViewProps> = ({
   onResolveReport,
   onNavigateProfile,
   onRefreshFeed,
+  unreadMessagesCount = 0,
+  onOpenMessages,
 }) => {
   const activeBooks = useMemo(
     () => books.filter((b) => b.status === 'ativo'),
@@ -1958,6 +1962,50 @@ export const CommunityView: React.FC<CommunityViewProps> = ({
           </div>
         ) : (
           <div className="space-y-6">
+            {/* Top Bar da Comunidade com acesso às Mensagens Diretas (💬) */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setFeedMode('todos')}
+                  className={`rounded-xl px-4 py-2 text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                    feedMode === 'todos'
+                      ? 'bg-[#2563EB] text-white shadow-md'
+                      : 'bg-[#071426] hover:bg-blue-500/15 border border-blue-400/20 text-blue-200 hover:text-white'
+                  }`}
+                >
+                  Para você
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFeedMode('seguindo')}
+                  className={`rounded-xl px-4 py-2 text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                    feedMode === 'seguindo'
+                      ? 'bg-[#2563EB] text-white shadow-md'
+                      : 'bg-[#071426] hover:bg-blue-500/15 border border-blue-400/20 text-blue-200 hover:text-white'
+                  }`}
+                >
+                  Seguindo
+                </button>
+              </div>
+
+              {onOpenMessages && (
+                <button
+                  type="button"
+                  onClick={() => onOpenMessages()}
+                  className="relative inline-flex items-center gap-2 rounded-xl bg-[#071426] hover:bg-blue-500/15 border border-blue-400/30 px-4 py-2 text-xs sm:text-sm font-bold text-white transition-all cursor-pointer shadow-md"
+                >
+                  <MessageCircle className="w-4 h-4 text-[#60A5FA]" />
+                  <span>Mensagens</span>
+                  {unreadMessagesCount > 0 && (
+                    <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-[#2563EB] px-1.5 text-[11px] font-mono-num font-bold text-white">
+                      {unreadMessagesCount > 99 ? '99+' : unreadMessagesCount}
+                    </span>
+                  )}
+                </button>
+              )}
+            </div>
+
             {/* Inline Post Composer Card */}
             {isAuthenticated && currentUserProfile ? (
               <div className="rounded-2xl bg-[#071426] border border-blue-400/25 p-4 sm:p-5 shadow-xl">
@@ -2259,6 +2307,21 @@ export const CommunityView: React.FC<CommunityViewProps> = ({
                             </>
                           )}
                         </button>
+
+                        {onOpenMessages && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const targetUid = inspectedProfile.uid;
+                              openInspectedUser(null);
+                              onOpenMessages(targetUid);
+                            }}
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-[#040D1A] hover:bg-blue-500/20 border border-blue-400/35 px-4 py-2 text-xs font-bold text-[#60A5FA] hover:text-white transition-colors cursor-pointer"
+                          >
+                            <MessageCircle className="w-4 h-4" />
+                            <span>Mensagem</span>
+                          </button>
+                        )}
 
                         <button
                           type="button"

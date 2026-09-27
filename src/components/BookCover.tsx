@@ -110,13 +110,25 @@ export const BookCover: React.FC<BookCoverProps> = ({
 
   return (
     <div
+      onContextMenu={(e) => e.preventDefault()}
+      onDragStart={(e) => e.preventDefault()}
       className={`relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-[#071426] border border-blue-400/20 shadow-[0_14px_34px_rgba(2,8,23,0.85)] select-none ${className}`}
     >
       <img
         src={book.capa}
         alt={`Capa do livro ${book.titulo}`}
         loading="lazy"
-        className={`h-full w-full object-cover transition-transform duration-700 ${imageClassName}`}
+        draggable={false}
+        onContextMenu={(e) => e.preventDefault()}
+        onDragStart={(e) => e.preventDefault()}
+        className={`pointer-events-none select-none h-full w-full object-cover transition-transform duration-700 ${imageClassName}`}
+      />
+
+      {/* Transparent protective shield preventing direct image right-click or drag */}
+      <div
+        className="absolute inset-0 z-10 select-none"
+        onContextMenu={(e) => e.preventDefault()}
+        onDragStart={(e) => e.preventDefault()}
       />
 
       {/* Realistic book spine crease along the left edge */}

@@ -43,6 +43,7 @@ import {
   CommunityReply,
   CommunityReport,
   CustomCategory,
+  DirectConversation,
   HomeRow,
   PlatformSettings,
   ProfileCustomization,
@@ -88,6 +89,8 @@ import {
   ProfileUpdateInput,
   validateUsernameFormat,
   generateDefaultUsername,
+  getUsernameChangeStatus,
+  saveLocalUsernameChangeHistory,
 } from './components/MyLibraryAndProfile';
 import {
   CommunityView,
@@ -100,6 +103,7 @@ import {
 } from './components/CommunityView';
 import { AdminDashboard } from './components/AdminDashboard';
 import { PremiumModal } from './components/PremiumModal';
+import { DirectMessagesModal } from './components/DirectMessagesModal';
 import {
   getMaxProfileFavoriteBooks,
   isUserPremium,
@@ -241,6 +245,13 @@ export default function App() {
   const [communityReports, setCommunityReports] = useState<CommunityReport[]>(
     []
   );
+  const [directConversations, setDirectConversations] = useState<
+    DirectConversation[]
+  >([]);
+  const [dmModalOpen, setDmModalOpen] = useState<boolean>(false);
+  const [dmInitialRecipientId, setDmInitialRecipientId] = useState<
+    string | null
+  >(null);
   const [bookReviews, setBookReviews] = useState<BookReview[]>(() =>
     readLocalArray<BookReview>(LOCAL_STORAGE_BOOK_REVIEWS_KEY)
   );
@@ -392,6 +403,47 @@ export default function App() {
     saveSessionProfile(finalProfile);
     setUserProfile(finalProfile);
   };
+
+  // 0. Global protection against dragging or downloading any image, book cover, avatar, or graphic
+  useEffect(() => {
+    const handlePreventDragStart = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    const handlePreventImageContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      const tagName = target.tagName?.toUpperCase();
+      // Allow normal context menu only inside text inputs/textareas for typing/pasting
+      if (
+        tagName === 'INPUT' ||
+        tagName === 'TEXTAREA' ||
+        target.isContentEditable
+      ) {
+        return;
+      }
+      e.preventDefault();
+    };
+
+    document.addEventListener('dragstart', handlePreventDragStart, {
+      capture: true,
+    });
+    document.addEventListener('contextmenu', handlePreventImageContextMenu, {
+      capture: true,
+    });
+
+    return () => {
+      document.removeEventListener('dragstart', handlePreventDragStart, {
+        capture: true,
+      });
+      document.removeEventListener(
+        'contextmenu',
+        handlePreventImageContextMenu,
+        { capture: true }
+      );
+    };
+  }, []);
 
   // 1. Listen to Firebase Authentication (using strictly real user metrics)
   useEffect(() => {
@@ -1183,6 +1235,36 @@ export default function App() {
     return () => unsubNotifs();
   }, [firebaseUser?.uid]);
 
+  // 11b. Real-time Subscription for Current User's Private Direct Conversations (/conversations)
+  useEffect(() => {
+    if (!firebaseUser?.uid) {
+      setDirectConversations([]);
+      return;
+    }
+    const q = query(
+      collection(db, 'conversations'),
+      where('participants', 'array-contains', firebaseUser.uid)
+    );
+    const unsubConvs = onSnapshot(
+      q,
+      (snap) => {
+        const list: DirectConversation[] = [];
+        snap.forEach((d) => {
+          const data = d.data() as DirectConversation;
+          list.push({ ...data, id: data.id || d.id });
+        });
+        list.sort((a, b) =>
+          (b.lastMessageAt || b.updatedAt || '').localeCompare(
+            a.lastMessageAt || a.updatedAt || ''
+          )
+        );
+        setDirectConversations(list);
+      },
+      () => {}
+    );
+    return () => unsubConvs();
+  }, [firebaseUser?.uid]);
+
   // 12. Real-time Subscription for Community Reports (Admin only)
   useEffect(() => {
     if (!isAdmin || !firebaseUser) {
@@ -1701,9 +1783,23 @@ export default function App() {
       );
     }
     const normalizedUsername = usernameValidation.normalized;
-    const previousUsername = (userProfile.username || '')
+    const previousUsername = (
+      userProfile.username || generateDefaultUsername(userProfile)
+    )
       .replace(/^@+/, '')
       .toLowerCase();
+    const isChangingUsername = normalizedUsername !== previousUsername;
+
+    const changeStatus = getUsernameChangeStatus(userProfile);
+    if (isChangingUsername && !changeStatus.canChange) {
+      throw new Error(
+        `Você só pode mudar o @username 2 vezes a cada 15 dias. Próxima alteração disponível em ${
+          changeStatus.daysUntilAvailable
+        } ${changeStatus.daysUntilAvailable === 1 ? 'dia' : 'dias'} (${
+          changeStatus.nextAvailableDateFormatted
+        }).`
+      );
+    }
 
     const cleanBio = input.bio.trim().slice(0, 160);
     const cleanPhotoURL = input.photoURL || '';
@@ -1754,6 +1850,13 @@ export default function App() {
     }
 
     const nowIso = new Date().toISOString();
+    const nextUsernameChangeHistory = isChangingUsername
+      ? [...changeStatus.validTimestampsIso, nowIso].slice(-5)
+      : changeStatus.validTimestampsIso;
+
+    if (isChangingUsername) {
+      saveLocalUsernameChangeHistory(targetUid, nextUsernameChangeHistory);
+    }
 
     const validBookIdsSet = new Set(books.map((b) => b.id));
     const rawFavIds = Array.isArray(input.favoriteBooks)
@@ -1787,6 +1890,7 @@ export default function App() {
       nome: cleanDisplayName,
       displayName: cleanDisplayName,
       username: normalizedUsername,
+      usernameChangeHistory: nextUsernameChangeHistory,
       bio: cleanBio,
       foto: cleanPhotoURL,
       photoURL: cleanPhotoURL,
@@ -1824,6 +1928,7 @@ export default function App() {
             nome: updatedProfile.nome,
             displayName: updatedProfile.displayName,
             username: updatedProfile.username,
+            usernameChangeHistory: nextUsernameChangeHistory,
             bio: updatedProfile.bio,
             foto: updatedProfile.foto,
             photoURL: updatedProfile.photoURL,
@@ -2678,6 +2783,30 @@ export default function App() {
     [communityNotifications, activeUserId]
   );
 
+  const unreadMessagesCount = useMemo(() => {
+    if (!activeUserId) return 0;
+    return directConversations.reduce((acc, conv) => {
+      const countForMe = Number(conv.unreadCounts?.[activeUserId] || 0);
+      if (countForMe > 0) return acc + countForMe;
+      if (
+        Array.isArray(conv.unreadBy) &&
+        conv.unreadBy.includes(activeUserId)
+      ) {
+        return acc + 1;
+      }
+      return acc;
+    }, 0);
+  }, [directConversations, activeUserId]);
+
+  const handleOpenDirectMessages = (recipientUserId?: string) => {
+    if (recipientUserId && recipientUserId !== activeUserId) {
+      setDmInitialRecipientId(recipientUserId);
+    } else {
+      setDmInitialRecipientId(null);
+    }
+    setDmModalOpen(true);
+  };
+
   const handleSaveBookReview = async (input: {
     bookId: string;
     text: string;
@@ -3438,6 +3567,8 @@ export default function App() {
         downloadsCount={downloadsCount}
         myListCount={myListCount}
         unreadCommunityCount={unreadCommunityCount}
+        unreadMessagesCount={unreadMessagesCount}
+        onOpenMessages={() => handleOpenDirectMessages()}
         categoriesList={effectiveCategoriesList}
         platformSettings={platformSettings}
         onOpenPremiumModal={() => setVipModalOpen(true)}
@@ -3459,6 +3590,8 @@ export default function App() {
             currentUserProfile={userProfile}
             isAuthenticated={Boolean(firebaseUser || userProfile)}
             isAdmin={isAdmin}
+            unreadMessagesCount={unreadMessagesCount}
+            onOpenMessages={handleOpenDirectMessages}
             onSelectBook={openBookDetail}
             onCreatePost={handleCreateCommunityPost}
             onDeletePost={handleDeleteCommunityPost}
@@ -3620,6 +3753,7 @@ export default function App() {
             isAuthenticated={Boolean(firebaseUser || userProfile)}
             isAdmin={isAdmin}
             onToggleFollow={handleToggleCommunityFollow}
+            onOpenMessages={handleOpenDirectMessages}
             onToggleLike={handleToggleCommunityLike}
             onCreateReply={handleCreateCommunityReply}
             onDeletePost={handleDeleteCommunityPost}
@@ -3744,6 +3878,7 @@ export default function App() {
             onSaveBookReview={handleSaveBookReview}
             onDeleteBookReview={handleDeleteBookReview}
             onToggleCommunityFollow={handleToggleCommunityFollow}
+            onOpenMessages={handleOpenDirectMessages}
             onSubmitReport={handleSubmitCommunityReport}
             onRequireAuth={() => handleNavigate('perfil')}
             onOpenPremiumModal={() => setVipModalOpen(true)}
@@ -3830,6 +3965,24 @@ export default function App() {
         }}
       />
 
+      {/* Mensagens Diretas (DM) Modal */}
+      <DirectMessagesModal
+        isOpen={dmModalOpen}
+        onClose={() => {
+          setDmModalOpen(false);
+          setDmInitialRecipientId(null);
+        }}
+        currentUserProfile={userProfile}
+        isAuthenticated={Boolean(firebaseUser || userProfile)}
+        conversations={directConversations}
+        publicProfilesMap={publicProfilesMap}
+        follows={communityFollows}
+        initialRecipientId={dmInitialRecipientId}
+        onClearInitialRecipient={() => setDmInitialRecipientId(null)}
+        onToggleFollow={handleToggleCommunityFollow}
+        onRequireAuth={() => handleNavigate('perfil')}
+      />
+
       {/* FOOTER */}
       <footer
         className="border-t border-blue-400/15 bg-[#020813] py-12"
@@ -3865,15 +4018,6 @@ export default function App() {
             >
               {platformSettings.navMyListText || 'Minha lista'}
             </button>
-            {platformSettings.showDownloadsTab !== false && (
-              <button
-                type="button"
-                onClick={() => handleNavigate('downloads')}
-                className="hover:text-[#60A5FA] transition-colors cursor-pointer"
-              >
-                {platformSettings.navDownloadsText || 'Downloads'}
-              </button>
-            )}
             <button
               type="button"
               onClick={() => handleNavigate('comunidade')}

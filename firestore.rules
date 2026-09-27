@@ -87,6 +87,7 @@ service cloud.firestore {
         (!('nome' in data) || (data.nome is string && data.nome.size() >= 1 && data.nome.size() <= 80)) &&
         (!('displayName' in data) || (data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80)) &&
         (!('username' in data) || (data.username is string && data.username.size() <= 30 && (data.username == '' || data.username.matches('^[a-z0-9._]{3,30}$')))) &&
+        (!('usernameChangeHistory' in data) || (data.usernameChangeHistory is list && data.usernameChangeHistory.size() <= 10 && (data.usernameChangeHistory.size() == 0 || data.usernameChangeHistory[0] is string))) &&
         (!('bio' in data) || (data.bio is string && data.bio.size() <= 300)) &&
         (!('foto' in data) || (data.foto is string && data.foto.size() <= 750000)) &&
         (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 750000)) &&
@@ -126,6 +127,7 @@ service cloud.firestore {
           'nome',
           'displayName',
           'username',
+          'usernameChangeHistory',
           'bio',
           'foto',
           'photoURL',
@@ -446,6 +448,124 @@ service cloud.firestore {
         isAuthenticated() &&
         resource.data.userId == request.auth.uid
       );
+    }
+
+    // ===============================================================
+    // Private Direct Messages (/conversations/{conversationId} & /messages/{messageId})
+    // Strictly private: ONLY the two authenticated participants can read or write.
+    // Prevents spoofing senderId, altering others' messages, or modifying participants.
+    // ===============================================================
+    function isConversationParticipant(conversationId) {
+      return isAuthenticated() && (
+        (
+          exists(/databases/$(database)/documents/conversations/$(conversationId)) &&
+          'participants' in get(/databases/$(database)/documents/conversations/$(conversationId)).data &&
+          get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants is list &&
+          request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants
+        ) ||
+        (
+          !exists(/databases/$(database)/documents/conversations/$(conversationId)) &&
+          conversationId.split('__').size() == 2 &&
+          request.auth.uid in conversationId.split('__')
+        )
+      );
+    }
+
+    function isOtherConversationParticipant(conversationId, otherUid) {
+      return otherUid is string &&
+        otherUid.size() >= 1 &&
+        otherUid != request.auth.uid && (
+          (
+            exists(/databases/$(database)/documents/conversations/$(conversationId)) &&
+            'participants' in get(/databases/$(database)/documents/conversations/$(conversationId)).data &&
+            get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants is list &&
+            otherUid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants
+          ) ||
+          (
+            conversationId.split('__').size() == 2 &&
+            otherUid in conversationId.split('__')
+          )
+        );
+    }
+
+    function isValidConversationPayload(data, conversationId) {
+      return (!('id' in data) || (data.id is string && data.id == conversationId)) &&
+        data.participants is list &&
+        data.participants.size() == 2 &&
+        data.participants[0] is string &&
+        data.participants[1] is string &&
+        data.participants[0] != data.participants[1] &&
+        request.auth.uid in data.participants &&
+        (
+          conversationId.split('__').size() != 2 ||
+          (
+            data.participants.hasAll(conversationId.split('__')) &&
+            conversationId.split('__').hasAll(data.participants)
+          )
+        ) &&
+        (!('lastMessage' in data) || (data.lastMessage is string && data.lastMessage.size() <= 1000)) &&
+        (!('lastMessageAt' in data) || (data.lastMessageAt is string && data.lastMessageAt.size() <= 64)) &&
+        (!('lastSenderId' in data) || (data.lastSenderId is string && data.lastSenderId in data.participants)) &&
+        (!('unreadBy' in data) || (data.unreadBy is list && data.unreadBy.size() <= 2)) &&
+        (!('unreadCounts' in data) || data.unreadCounts is map) &&
+        (!('participantProfiles' in data) || data.participantProfiles is map) &&
+        (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    match /conversations/{conversationId} {
+      allow get: if isAuthenticated() && (
+        (resource != null && request.auth.uid in resource.data.participants) ||
+        (resource == null && conversationId.split('__').size() == 2 && request.auth.uid in conversationId.split('__'))
+      );
+      allow list: if isAuthenticated() &&
+        request.auth.uid in resource.data.participants;
+      allow create: if isAuthenticated() &&
+        isValidConversationPayload(request.resource.data, conversationId);
+      allow update: if isAuthenticated() &&
+        request.auth.uid in resource.data.participants &&
+        request.resource.data.participants == resource.data.participants &&
+        (!('id' in resource.data) || !('id' in request.resource.data) || request.resource.data.id == resource.data.id) &&
+        isValidConversationPayload(request.resource.data, conversationId);
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow get, list: if isConversationParticipant(conversationId);
+        allow create: if isConversationParticipant(conversationId) &&
+          request.resource.data.id is string &&
+          request.resource.data.id.size() >= 1 &&
+          request.resource.data.id.size() <= 160 &&
+          request.resource.data.conversationId == conversationId &&
+          request.resource.data.senderId == request.auth.uid &&
+          isOtherConversationParticipant(conversationId, request.resource.data.recipientId) &&
+          request.resource.data.text is string &&
+          request.resource.data.text.size() >= 1 &&
+          request.resource.data.text.size() <= 1000 &&
+          request.resource.data.createdAt is string &&
+          request.resource.data.createdAt.size() <= 64 &&
+          request.resource.data.read is bool &&
+          (!('hiddenFor' in request.resource.data) || (request.resource.data.hiddenFor is list && request.resource.data.hiddenFor.size() <= 2));
+        allow update: if isConversationParticipant(conversationId) &&
+          request.resource.data.senderId == resource.data.senderId &&
+          request.resource.data.recipientId == resource.data.recipientId &&
+          request.resource.data.conversationId == resource.data.conversationId &&
+          request.resource.data.text == resource.data.text &&
+          request.resource.data.createdAt == resource.data.createdAt && (
+            // Participant marking message as read
+            (
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']) &&
+              request.resource.data.read is bool
+            ) ||
+            // Sender hiding their own message from their own view
+            (
+              resource.data.senderId == request.auth.uid &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hiddenFor']) &&
+              request.resource.data.hiddenFor is list &&
+              request.resource.data.hiddenFor.size() <= 2
+            )
+          );
+        allow delete: if false;
+      }
     }
 
     match /{path=**}/library/{bookId} {

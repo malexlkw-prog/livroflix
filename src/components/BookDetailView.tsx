@@ -17,6 +17,7 @@ import {
   UserPlus,
   UserCheck,
   MessageSquareText,
+  MessageCircle,
   ChevronDown,
 } from 'lucide-react';
 import {
@@ -141,6 +142,7 @@ interface BookDetailViewProps {
   onSubmitReport?: (input: CreateReportInput) => Promise<void>;
   onRequireAuth?: () => void;
   onOpenPremiumModal?: () => void;
+  onOpenMessages?: (targetUserId?: string) => void;
   readButtonText?: string;
   ratingPromptText?: string;
   relatedBooksPrefix?: string;
@@ -168,6 +170,7 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
   onSubmitReport,
   onRequireAuth,
   onOpenPremiumModal,
+  onOpenMessages,
   readButtonText = 'LER LIVRO',
   ratingPromptText = 'Avalie esta obra',
   relatedBooksPrefix = 'Se você gostou de',
@@ -1051,10 +1054,12 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
                             @{authorUsername}
                           </span>
                           {authorIsPremium && (
-                            <Crown
-                              className="w-3.5 h-3.5 text-amber-400 fill-amber-400/25 shrink-0"
+                            <span
                               title="Assinante LIVROFLIX Premium"
-                            />
+                              className="inline-flex shrink-0"
+                            >
+                              <Crown className="w-3.5 h-3.5 text-amber-400 fill-amber-400/25" />
+                            </span>
                           )}
                         </div>
 
@@ -1247,10 +1252,12 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
                   @{inspectedProfile.username}
                 </span>
                 {isUserPremium(inspectedProfile) && (
-                  <Crown
-                    className="w-4 h-4 text-amber-400 fill-amber-400/25 shrink-0"
+                  <span
                     title="LIVROFLIX Premium"
-                  />
+                    className="inline-flex shrink-0"
+                  >
+                    <Crown className="w-4 h-4 text-amber-400 fill-amber-400/25" />
+                  </span>
                 )}
               </div>
               <button
@@ -1341,31 +1348,49 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
                     />
 
                     {userProfile?.uid &&
-                      inspectedProfile.uid !== userProfile.uid &&
-                      onToggleCommunityFollow && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onToggleCommunityFollow(inspectedProfile.uid)
-                          }
-                          className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition-colors cursor-pointer ${
-                            myFollowingIds.has(inspectedProfile.uid)
-                              ? 'bg-blue-950 border border-blue-400/30 text-blue-100'
-                              : 'bg-[#2563EB] hover:bg-[#3B82F6] text-white'
-                          }`}
-                        >
-                          {myFollowingIds.has(inspectedProfile.uid) ? (
-                            <>
-                              <UserCheck className="w-4 h-4" />
-                              <span>Seguindo</span>
-                            </>
-                          ) : (
-                            <>
-                              <UserPlus className="w-4 h-4" />
-                              <span>Seguir</span>
-                            </>
+                      inspectedProfile.uid !== userProfile.uid && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          {onToggleCommunityFollow && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onToggleCommunityFollow(inspectedProfile.uid)
+                              }
+                              className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition-colors cursor-pointer ${
+                                myFollowingIds.has(inspectedProfile.uid)
+                                  ? 'bg-blue-950 border border-blue-400/30 text-blue-100'
+                                  : 'bg-[#2563EB] hover:bg-[#3B82F6] text-white'
+                              }`}
+                            >
+                              {myFollowingIds.has(inspectedProfile.uid) ? (
+                                <>
+                                  <UserCheck className="w-4 h-4" />
+                                  <span>Seguindo</span>
+                                </>
+                              ) : (
+                                <>
+                                  <UserPlus className="w-4 h-4" />
+                                  <span>Seguir</span>
+                                </>
+                              )}
+                            </button>
                           )}
-                        </button>
+
+                          {onOpenMessages && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const targetUid = inspectedProfile.uid;
+                                setInspectedUserId(null);
+                                onOpenMessages(targetUid);
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-xl bg-[#040D1A] hover:bg-blue-500/20 border border-blue-400/35 px-4 py-2 text-xs font-bold text-[#60A5FA] hover:text-white transition-colors cursor-pointer"
+                            >
+                              <MessageCircle className="w-4 h-4" />
+                              <span>Mensagem</span>
+                            </button>
+                          )}
+                        </div>
                       )}
                   </div>
                 </div>

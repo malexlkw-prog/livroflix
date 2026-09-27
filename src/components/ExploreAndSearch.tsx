@@ -9,6 +9,7 @@ import {
   UserPlus,
   UserCheck,
   Crown,
+  MessageCircle,
 } from 'lucide-react';
 import {
   Book,
@@ -57,6 +58,7 @@ interface SearchViewProps {
   onDeletePost?: (postId: string) => Promise<void>;
   onDeleteReply?: (replyId: string) => Promise<void>;
   onRequireAuth?: () => void;
+  onOpenMessages?: (targetUserId?: string) => void;
 }
 
 const LEGACY_SUGGESTIONS = new Set([
@@ -86,6 +88,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
   onDeletePost,
   onDeleteReply,
   onRequireAuth,
+  onOpenMessages,
 }) => {
   const [query, setQuery] = useState<string>('');
   const [inspectedUserId, setInspectedUserId] = useState<string | null>(null);
@@ -665,27 +668,44 @@ export const SearchView: React.FC<SearchViewProps> = ({
                 </div>
 
                 {inspectedProfile.uid !== currentUserId && (
-                  <button
-                    type="button"
-                    onClick={() => handleFollowButtonClick(inspectedProfile.uid)}
-                    className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs sm:text-sm font-bold transition-all cursor-pointer shrink-0 ${
-                      myFollowingIds.has(inspectedProfile.uid)
-                        ? 'bg-blue-950/70 border border-blue-400/30 text-blue-200 hover:border-rose-400/40 hover:text-rose-200'
-                        : 'bg-[#2563EB] hover:bg-[#3B82F6] text-white shadow-lg'
-                    }`}
-                  >
-                    {myFollowingIds.has(inspectedProfile.uid) ? (
-                      <>
-                        <UserCheck className="w-4 h-4" />
-                        <span>Seguindo</span>
-                      </>
-                    ) : (
-                      <>
-                        <UserPlus className="w-4 h-4" />
-                        <span>Seguir</span>
-                      </>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleFollowButtonClick(inspectedProfile.uid)}
+                      className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs sm:text-sm font-bold transition-all cursor-pointer shrink-0 ${
+                        myFollowingIds.has(inspectedProfile.uid)
+                          ? 'bg-blue-950/70 border border-blue-400/30 text-blue-200 hover:border-rose-400/40 hover:text-rose-200'
+                          : 'bg-[#2563EB] hover:bg-[#3B82F6] text-white shadow-lg'
+                      }`}
+                    >
+                      {myFollowingIds.has(inspectedProfile.uid) ? (
+                        <>
+                          <UserCheck className="w-4 h-4" />
+                          <span>Seguindo</span>
+                        </>
+                      ) : (
+                        <>
+                          <UserPlus className="w-4 h-4" />
+                          <span>Seguir</span>
+                        </>
+                      )}
+                    </button>
+
+                    {onOpenMessages && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const targetUid = inspectedProfile.uid;
+                          openInspectedUser(null);
+                          onOpenMessages(targetUid);
+                        }}
+                        className="inline-flex items-center gap-2 rounded-xl bg-[#040D1A] hover:bg-blue-500/20 border border-blue-400/35 px-4 py-2.5 text-xs sm:text-sm font-bold text-[#60A5FA] hover:text-white transition-colors cursor-pointer shrink-0"
+                      >
+                        <MessageCircle className="w-4 h-4" />
+                        <span>Mensagem</span>
+                      </button>
                     )}
-                  </button>
+                  </div>
                 )}
                 </div>
               </div>

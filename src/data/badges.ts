@@ -531,12 +531,15 @@ export const BadgeImage: React.FC<{
     src: activeSrc,
     alt: `Selo ${def.name}`,
     referrerPolicy: 'no-referrer',
+    draggable: false,
+    onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+    onDragStart: (e: React.DragEvent) => e.preventDefault(),
     onError: () => {
       if (urlIndex + 1 < candidateUrls.length) {
         setUrlIndex((prev) => prev + 1);
       }
     },
-    className: `object-contain select-none transition-all duration-300 ${
+    className: `pointer-events-none object-contain select-none transition-all duration-300 ${
       locked
         ? 'grayscale brightness-50 opacity-50'
         : 'drop-shadow-[0_4px_10px_rgba(37,99,235,0.35)]'
