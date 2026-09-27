@@ -81,17 +81,371 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    function isValidUserProfilePayload(data, userId) {
+      return data.uid is string &&
+        data.uid == userId &&
+        (!('nome' in data) || (data.nome is string && data.nome.size() >= 1 && data.nome.size() <= 80)) &&
+        (!('displayName' in data) || (data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80)) &&
+        (!('username' in data) || (data.username is string && data.username.size() <= 30 && (data.username == '' || data.username.matches('^[a-z0-9._]{3,30}$')))) &&
+        (!('bio' in data) || (data.bio is string && data.bio.size() <= 300)) &&
+        (!('foto' in data) || (data.foto is string && data.foto.size() <= 750000)) &&
+        (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 750000)) &&
+        (!('premium' in data) || data.premium is bool) &&
+        (!('premiumPlan' in data) || (data.premiumPlan is string && data.premiumPlan.size() <= 40)) &&
+        (!('premiumStatus' in data) || (data.premiumStatus is string && data.premiumStatus.size() <= 40)) &&
+        (!('premiumUpdatedAt' in data) || (data.premiumUpdatedAt is string && data.premiumUpdatedAt.size() <= 64)) &&
+        (!('usernameColor' in data) || (data.usernameColor is string && data.usernameColor.size() <= 16)) &&
+        (!('favoriteBooks' in data) || (data.favoriteBooks is list && data.favoriteBooks.size() <= 5)) &&
+        (!('profileFavoriteBooks' in data) || (data.profileFavoriteBooks is list && data.profileFavoriteBooks.size() <= 5)) &&
+        (!('unlockedBadges' in data) || (data.unlockedBadges is list && data.unlockedBadges.size() <= 10)) &&
+        (!('profileBadges' in data) || (data.profileBadges is list && data.profileBadges.size() <= 10 && (!('unlockedBadges' in data) || data.profileBadges.hasOnly(data.unlockedBadges)))) &&
+        (!('nightReadingsCount' in data) || (data.nightReadingsCount is number && data.nightReadingsCount >= 0));
+    }
+
     // ===============================================================
     // Users & Library (/users/{userId})
     // ===============================================================
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
-      allow create, update: if isOwner(userId) || isAdmin();
+
+      allow create: if isAdmin() || (
+        isOwner(userId) &&
+        isValidUserProfilePayload(request.resource.data, userId) &&
+        (!('role' in request.resource.data) || request.resource.data.role == 'user') &&
+        (!('email' in request.resource.data) || request.resource.data.email == '' || request.resource.data.email == request.auth.token.email)
+      );
+
+      allow update: if isAdmin() || (
+        isOwner(userId) &&
+        isValidUserProfilePayload(request.resource.data, userId) &&
+        (!('uid' in resource.data) || request.resource.data.uid == resource.data.uid) &&
+        (!('role' in resource.data) ? request.resource.data.role == 'user' : request.resource.data.role == resource.data.role) &&
+        (!('email' in resource.data) || request.resource.data.email == resource.data.email) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'uid',
+          'nome',
+          'displayName',
+          'username',
+          'bio',
+          'foto',
+          'photoURL',
+          'premium',
+          'premiumPlan',
+          'premiumStatus',
+          'premiumUpdatedAt',
+          'usernameColor',
+          'preferenciasLeitor',
+          'profileCustomization',
+          'favoriteBooks',
+          'profileFavoriteBooks',
+          'unlockedBadges',
+          'profileBadges',
+          'nightReadingsCount',
+          'streakDays',
+          'totalMinutesRead',
+          'updatedAt'
+        ])
+      );
+
       allow delete: if isAdmin();
 
       match /library/{bookId} {
         allow read, write: if isOwner(userId) || isAdmin();
       }
+
+      match /profileCustomization/{docId} {
+        allow read: if true;
+        allow write: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    // ===============================================================
+    // Unique Usernames Index (/usernames/{username})
+    // ===============================================================
+    match /usernames/{username} {
+      allow get: if true;
+      allow list: if isAdmin();
+      allow create: if isAdmin() || (
+        isAuthenticated() &&
+        username.matches('^[a-z0-9._]{3,30}$') &&
+        request.resource.data.keys().hasOnly(['uid', 'username', 'updatedAt']) &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.username == username
+      );
+      allow update: if isAdmin() || (
+        isAuthenticated() &&
+        username.matches('^[a-z0-9._]{3,30}$') &&
+        resource.data.uid == request.auth.uid &&
+        request.resource.data.keys().hasOnly(['uid', 'username', 'updatedAt']) &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.username == username
+      );
+      allow delete: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.uid == request.auth.uid
+      );
+    }
+
+    // ===============================================================
+    // Public Literary Profiles (/public_profiles/{userId})
+    // ===============================================================
+    match /public_profiles/{userId} {
+      allow read: if true;
+      allow create, update: if isAdmin() || (
+        isOwner(userId) &&
+        request.resource.data.uid == userId &&
+        request.resource.data.displayName is string &&
+        request.resource.data.displayName.size() >= 1 &&
+        request.resource.data.displayName.size() <= 80 &&
+        request.resource.data.username is string &&
+        request.resource.data.username.size() <= 30 &&
+        (!('bio' in request.resource.data) || (request.resource.data.bio is string && request.resource.data.bio.size() <= 300)) &&
+        (!('photoURL' in request.resource.data) || (request.resource.data.photoURL is string && request.resource.data.photoURL.size() <= 750000)) &&
+        (!('premium' in request.resource.data) || request.resource.data.premium is bool) &&
+        (!('usernameColor' in request.resource.data) || (request.resource.data.usernameColor is string && request.resource.data.usernameColor.size() <= 16)) &&
+        (!('favoriteBooks' in request.resource.data) || (request.resource.data.favoriteBooks is list && request.resource.data.favoriteBooks.size() <= 5)) &&
+        (!('profileFavoriteBooks' in request.resource.data) || (request.resource.data.profileFavoriteBooks is list && request.resource.data.profileFavoriteBooks.size() <= 5)) &&
+        (!('unlockedBadges' in request.resource.data) || (request.resource.data.unlockedBadges is list && request.resource.data.unlockedBadges.size() <= 10)) &&
+        (!('profileBadges' in request.resource.data) || (request.resource.data.profileBadges is list && request.resource.data.profileBadges.size() <= 10 && (!('unlockedBadges' in request.resource.data) || request.resource.data.profileBadges.hasOnly(request.resource.data.unlockedBadges))))
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // Community Posts (/community_posts/{postId})
+    // Strict 300-character limit and owner-only write/delete
+    // ===============================================================
+    function isValidCommunityPostPayload(data) {
+      return data.id is string &&
+        data.id.size() >= 1 &&
+        data.id.size() <= 128 &&
+        data.authorId is string &&
+        data.authorName is string &&
+        data.authorName.size() >= 1 &&
+        data.authorName.size() <= 80 &&
+        data.authorUsername is string &&
+        data.authorUsername.size() >= 1 &&
+        data.authorUsername.size() <= 30 &&
+        data.text is string &&
+        data.text.size() <= 300 &&
+        (data.text.size() > 0 || ('imageUrl' in data && data.imageUrl is string && data.imageUrl.size() > 0)) &&
+        (!('authorPhoto' in data) || (data.authorPhoto is string && data.authorPhoto.size() <= 750000)) &&
+        (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 750000)) &&
+        (!('bookId' in data) || (data.bookId is string && data.bookId.size() <= 128)) &&
+        (!('mentions' in data) || (data.mentions is list && data.mentions.size() <= 20)) &&
+        data.createdAt is string &&
+        data.createdAt.size() <= 64;
+    }
+
+    match /community_posts/{postId} {
+      allow read: if true;
+      allow create: if isAuthenticated() &&
+        request.resource.data.authorId == request.auth.uid &&
+        isValidCommunityPostPayload(request.resource.data);
+      allow update: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.authorId == request.auth.uid &&
+        request.resource.data.authorId == resource.data.authorId &&
+        isValidCommunityPostPayload(request.resource.data)
+      );
+      allow delete: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.authorId == request.auth.uid
+      );
+    }
+
+    // ===============================================================
+    // Community Likes (/community_likes/{likeId})
+    // ===============================================================
+    match /community_likes/{likeId} {
+      allow read: if true;
+      allow create: if isAuthenticated() &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.postId is string &&
+        request.resource.data.postId.size() >= 1 &&
+        request.resource.data.postId.size() <= 128 &&
+        request.resource.data.postAuthorId is string &&
+        request.resource.data.postAuthorId.size() <= 128 &&
+        request.resource.data.createdAt is string &&
+        request.resource.data.createdAt.size() <= 64;
+      allow update: if false;
+      allow delete: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.userId == request.auth.uid
+      );
+    }
+
+    // ===============================================================
+    // Community Replies (/community_replies/{replyId})
+    // Strict 300-character limit and owner-only write/delete
+    // ===============================================================
+    function isValidCommunityReplyPayload(data) {
+      return data.id is string &&
+        data.id.size() >= 1 &&
+        data.id.size() <= 128 &&
+        data.postId is string &&
+        data.postId.size() >= 1 &&
+        data.postId.size() <= 128 &&
+        data.postAuthorId is string &&
+        data.postAuthorId.size() <= 128 &&
+        data.authorId is string &&
+        data.authorName is string &&
+        data.authorName.size() >= 1 &&
+        data.authorName.size() <= 80 &&
+        data.authorUsername is string &&
+        data.authorUsername.size() >= 1 &&
+        data.authorUsername.size() <= 30 &&
+        (!('authorPhoto' in data) || (data.authorPhoto is string && data.authorPhoto.size() <= 750000)) &&
+        data.text is string &&
+        data.text.size() >= 1 &&
+        data.text.size() <= 300 &&
+        (!('parentReplyId' in data) || (data.parentReplyId is string && data.parentReplyId.size() <= 128)) &&
+        (!('replyToUsername' in data) || (data.replyToUsername is string && data.replyToUsername.size() <= 30)) &&
+        data.createdAt is string &&
+        data.createdAt.size() <= 64;
+    }
+
+    match /community_replies/{replyId} {
+      allow read: if true;
+      allow create: if isAuthenticated() &&
+        request.resource.data.authorId == request.auth.uid &&
+        isValidCommunityReplyPayload(request.resource.data);
+      allow update: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.authorId == request.auth.uid &&
+        request.resource.data.authorId == resource.data.authorId &&
+        isValidCommunityReplyPayload(request.resource.data)
+      );
+      allow delete: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.authorId == request.auth.uid
+      );
+    }
+
+    // ===============================================================
+    // Community Follows (/community_follows/{followId})
+    // Prevents following oneself and restricts to followerId == auth.uid
+    // ===============================================================
+    match /community_follows/{followId} {
+      allow read: if true;
+      allow create: if isAuthenticated() &&
+        request.resource.data.followerId == request.auth.uid &&
+        request.resource.data.followingId is string &&
+        request.resource.data.followingId.size() >= 1 &&
+        request.resource.data.followingId.size() <= 128 &&
+        request.resource.data.followerId != request.resource.data.followingId &&
+        request.resource.data.createdAt is string &&
+        request.resource.data.createdAt.size() <= 64;
+      allow update: if false;
+      allow delete: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.followerId == request.auth.uid
+      );
+    }
+
+    // ===============================================================
+    // Community Notifications (/community_notifications/{notificationId})
+    // ===============================================================
+    match /community_notifications/{notificationId} {
+      allow read: if isAdmin() || (
+        isAuthenticated() &&
+        (resource.data.recipientId == request.auth.uid || resource.data.actorId == request.auth.uid)
+      );
+      allow create: if isAuthenticated() &&
+        request.resource.data.actorId == request.auth.uid &&
+        request.resource.data.recipientId is string &&
+        request.resource.data.recipientId.size() >= 1 &&
+        request.resource.data.recipientId.size() <= 128 &&
+        request.resource.data.recipientId != request.auth.uid &&
+        request.resource.data.type in ['follow', 'like', 'reply', 'mention'] &&
+        request.resource.data.read is bool &&
+        (!('snippet' in request.resource.data) || (request.resource.data.snippet is string && request.resource.data.snippet.size() <= 300)) &&
+        request.resource.data.createdAt is string &&
+        request.resource.data.createdAt.size() <= 64;
+      allow update: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.recipientId == request.auth.uid &&
+        request.resource.data.recipientId == resource.data.recipientId &&
+        request.resource.data.actorId == resource.data.actorId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']) &&
+        request.resource.data.read is bool
+      );
+      allow delete: if isAdmin() || (
+        isAuthenticated() &&
+        (resource.data.recipientId == request.auth.uid || resource.data.actorId == request.auth.uid)
+      );
+    }
+
+    // ===============================================================
+    // Community Moderation Reports (/community_reports/{reportId})
+    // ===============================================================
+    match /community_reports/{reportId} {
+      allow read: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.reporterId == request.auth.uid
+      );
+      allow create: if isAuthenticated() &&
+        request.resource.data.reporterId == request.auth.uid &&
+        request.resource.data.targetType in ['post', 'user', 'review'] &&
+        request.resource.data.targetUserId is string &&
+        request.resource.data.targetUserId.size() >= 1 &&
+        request.resource.data.targetUserId.size() <= 128 &&
+        request.resource.data.reason is string &&
+        request.resource.data.reason.size() >= 1 &&
+        request.resource.data.reason.size() <= 200 &&
+        (!('details' in request.resource.data) || (request.resource.data.details is string && request.resource.data.details.size() <= 500)) &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.createdAt is string &&
+        request.resource.data.createdAt.size() <= 64;
+      allow update, delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // Literary Book Reviews (/book_reviews/{reviewId})
+    // 1 to 500 characters, half-star ratings (0.5 to 5), and owner-only edit/delete
+    // ===============================================================
+    function isValidBookReviewPayload(data) {
+      return data.id is string &&
+        data.id.size() >= 1 &&
+        data.id.size() <= 160 &&
+        data.bookId is string &&
+        data.bookId.size() >= 1 &&
+        data.bookId.size() <= 128 &&
+        data.userId is string &&
+        data.userId.size() >= 1 &&
+        data.userId.size() <= 128 &&
+        data.authorName is string &&
+        data.authorName.size() >= 1 &&
+        data.authorName.size() <= 80 &&
+        data.authorUsername is string &&
+        data.authorUsername.size() >= 1 &&
+        data.authorUsername.size() <= 30 &&
+        (!('authorPhoto' in data) || (data.authorPhoto is string && data.authorPhoto.size() <= 750000)) &&
+        data.text is string &&
+        data.text.size() >= 1 &&
+        data.text.size() <= 500 &&
+        (!('rating' in data) || (data.rating is number && data.rating >= 0.5 && data.rating <= 5)) &&
+        data.createdAt is string &&
+        data.createdAt.size() <= 64 &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    match /book_reviews/{reviewId} {
+      allow read: if true;
+      allow create: if isAuthenticated() &&
+        request.resource.data.userId == request.auth.uid &&
+        isValidBookReviewPayload(request.resource.data);
+      allow update: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.bookId == resource.data.bookId &&
+        isValidBookReviewPayload(request.resource.data)
+      );
+      allow delete: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.userId == request.auth.uid
+      );
     }
 
     match /{path=**}/library/{bookId} {

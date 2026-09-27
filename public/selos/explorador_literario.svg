@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+    
+  <defs>
+    <linearGradient id="antiqueGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F6E29F"/>
+      <stop offset="35%" stop-color="#D4AF61"/>
+      <stop offset="70%" stop-color="#A67C37"/>
+      <stop offset="100%" stop-color="#6E4E1E"/>
+    </linearGradient>
+    <linearGradient id="brightGold" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFF3C4"/>
+      <stop offset="50%" stop-color="#E5C168"/>
+      <stop offset="100%" stop-color="#9B722C"/>
+    </linearGradient>
+    <linearGradient id="silverGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F8FAFC"/>
+      <stop offset="45%" stop-color="#CBD5E1"/>
+      <stop offset="80%" stop-color="#64748B"/>
+      <stop offset="100%" stop-color="#334155"/>
+    </linearGradient>
+    <linearGradient id="pageLight" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#E8DCC4"/>
+      <stop offset="45%" stop-color="#FAF4E8"/>
+      <stop offset="50%" stop-color="#C8B696"/>
+      <stop offset="55%" stop-color="#FAF4E8"/>
+      <stop offset="100%" stop-color="#DFD0B5"/>
+    </linearGradient>
+    <radialGradient id="navySky" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#102A45"/>
+      <stop offset="65%" stop-color="#07172B"/>
+      <stop offset="100%" stop-color="#030A14"/>
+    </radialGradient>
+    <radialGradient id="parchmentBg" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#F7EFE0"/>
+      <stop offset="75%" stop-color="#DFCFAF"/>
+      <stop offset="100%" stop-color="#C2AE88"/>
+    </radialGradient>
+    <radialGradient id="burgundyBg" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#5B131E"/>
+      <stop offset="70%" stop-color="#33080E"/>
+      <stop offset="100%" stop-color="#190306"/>
+    </radialGradient>
+    <filter id="dropShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+
+    <path d="M256 22 L438 124 L438 348 L256 488 L74 348 L74 124 Z" fill="url(#antiqueGold)" stroke="#1E293B" stroke-width="5" filter="url(#dropShadow)"/>
+    <path d="M256 40 L420 134 L420 338 L256 468 L92 338 L92 134 Z" fill="url(#parchmentBg)" stroke="#6E4E1E" stroke-width="4"/>
+    <!-- Lower Dark Navy Field for Text -->
+    <path d="M92 316 L420 316 L420 338 L256 468 L92 338 Z" fill="#071426" stroke="url(#antiqueGold)" stroke-width="3"/>
+    <!-- Cartography Grid Lines -->
+    <g stroke="#8C734B" stroke-width="1.5" opacity="0.4" fill="none">
+      <line x1="110" y1="160" x2="402" y2="240"/>
+      <line x1="110" y1="250" x2="402" y2="150"/>
+      <circle cx="256" cy="186" r="112"/>
+    </g>
+    <!-- Nautical Compass Rose -->
+    <circle cx="256" cy="112" r="14" fill="none" stroke="url(#antiqueGold)" stroke-width="5"/>
+    <circle cx="256" cy="186" r="68" fill="#0B2545" stroke="url(#antiqueGold)" stroke-width="6"/>
+    <circle cx="256" cy="186" r="54" fill="none" stroke="#D4AF61" stroke-width="2" stroke-dasharray="6 4"/>
+    <polygon points="256,122 270,172 320,186 270,200 256,250 242,200 192,186 242,172" fill="url(#brightGold)" stroke="#6E4E1E" stroke-width="2"/>
+    <circle cx="256" cy="186" r="9" fill="#FAF4E8" stroke="#6E4E1E" stroke-width="2.5"/>
+    <!-- Open Book Below Compass -->
+    
+  <g transform="translate(256, 286) scale(0.92)">
+    <!-- Book Cover Base -->
+    <path d="M-128 32 L-8 40 L8 40 L128 32 L134 44 L10 52 L-10 52 L-134 44 Z" fill="#164E63" stroke="#D4AF61" stroke-width="2.5"/>
+    <path d="M-14 44 C-6 52, 6 52, 14 44" fill="none" stroke="#D4AF61" stroke-width="3.5"/>
+    <!-- Lower page stack -->
+    <path d="M-124 30 C-82 18, -36 22, 0 38 C36 22, 82 18, 124 30 L118 14 C78 2, 34 8, 0 26 C-34 8, -78 2, -118 14 Z" fill="#D5C4A1" stroke="#8C734B" stroke-width="1.5"/>
+    <!-- Main Open Pages -->
+    <path d="M-118 16 C-78 -2, -34 4, 0 24 C34 4, 78 -2, 118 16 L108 -54 C72 -70, 32 -62, 0 -40 C-32 -62, -72 -70, -108 -54 Z" fill="url(#pageLight)" stroke="#B59B6D" stroke-width="2"/>
+    <line x1="0" y1="-40" x2="0" y2="26" stroke="#A38A5E" stroke-width="2.5"/>
+    <!-- Subtle text lines on left page -->
+    <path d="M-90 -36 Q-52 -46 -16 -28 M-92 -22 Q-52 -32 -16 -14 M-94 -8 Q-52 -18 -16 0 M-94 6 Q-52 -4 -18 12" fill="none" stroke="#8C7A5B" stroke-width="2" opacity="0.55" stroke-linecap="round"/>
+    <!-- Subtle text lines on right page -->
+    <path d="M90 -36 Q52 -46 16 -28 M92 -22 Q52 -32 16 -14 M94 -8 Q52 -18 16 0 M94 6 Q52 -4 18 12" fill="none" stroke="#8C7A5B" stroke-width="2" opacity="0.55" stroke-linecap="round"/>
+  </g>
+
+    <!-- Typography -->
+    <text x="256" y="372" text-anchor="middle" fill="#F8FAFC" font-family="Georgia, serif" font-weight="bold" font-size="24" letter-spacing="1.5">EXPLORADOR</text>
+    <text x="256" y="406" text-anchor="middle" fill="#F6E29F" font-family="Georgia, serif" font-weight="bold" font-size="24" letter-spacing="1.5">LITERÁRIO</text>
+  </svg>

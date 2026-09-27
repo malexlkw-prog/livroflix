@@ -25,6 +25,9 @@ import {
   Upload,
   AlertCircle,
   Loader2,
+  Award,
+  Play,
+  Crown,
 } from 'lucide-react';
 import { collection, getDocs } from 'firebase/firestore';
 import {
@@ -40,6 +43,8 @@ import {
   HomeRow,
   HomeRowType,
   PlatformSettings,
+  ProfileCustomization,
+  ProfileEffectId,
   UserBookItem,
   UserProfile,
 } from '../types';
@@ -49,6 +54,24 @@ import {
 } from '../data/catalog';
 import { BookCover } from './BookCover';
 import { ImagePickerField } from './ImagePickerField';
+import {
+  ALL_BADGE_IDS,
+  BADGE_DEFINITIONS,
+  BadgeId,
+  BadgeImage,
+  EvaluatedAchievement,
+} from '../data/badges';
+import { BadgeUnlockModal } from './BadgeUnlockModal';
+import { ProfileBadgesShowcase } from './MyLibraryAndProfile';
+import {
+  DECORATIVE_EFFECT_PRESETS,
+  READY_VISUAL_THEMES,
+  DEFAULT_PROFILE_CUSTOMIZATION,
+  getProfileBackgroundStyle,
+  ProfileDecorativeEffectLayer,
+  ProfileIntegratedBanner,
+} from './ProfileCustomization';
+import { USERNAME_COLOR_PRESETS } from '../utils/premiumUtils';
 
 interface AdminDashboardProps {
   books: Book[];
@@ -124,7 +147,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     | 'identidade'
     | 'textos-menus'
     | 'usuarios'
+    | 'selos-preview'
   >('catalogo');
+
+  // --- TAB 8: SELOS, ANIMAÇÕES & PREVIEW DE PERFIL (EXCLUSIVO ADMIN) ---
+  const [previewBadgeIds, setPreviewBadgeIds] = useState<BadgeId[]>([
+    'primeiras_paginas',
+    'leitor_incansavel',
+    'explorador_literario',
+    'apaixonado_por_livros',
+  ]);
+  const [previewUnlockedBadgeIds, setPreviewUnlockedBadgeIds] =
+    useState<BadgeId[]>(ALL_BADGE_IDS);
+  const [previewAnimationBadgeId, setPreviewAnimationBadgeId] =
+    useState<BadgeId | null>(null);
+  const [previewAnimationKey, setPreviewAnimationKey] = useState<number>(0);
+  const [previewIsOwnerMode, setPreviewIsOwnerMode] = useState<boolean>(false);
+  const [previewIsPremium, setPreviewIsPremium] = useState<boolean>(true);
+  const [previewUsernameColor, setPreviewUsernameColor] =
+    useState<string>('#F59E0B');
+  const [previewCustomization, setPreviewCustomization] =
+    useState<ProfileCustomization>({
+      ...DEFAULT_PROFILE_CUSTOMIZATION,
+      effects: 'starlight-particles',
+    });
+
+  const handleTriggerBadgeAnimation = (badgeId: BadgeId) => {
+    setPreviewAnimationBadgeId(badgeId);
+    setPreviewAnimationKey((prev) => prev + 1);
+  };
+
+  const handleTogglePreviewBadgeOnProfile = (badgeId: BadgeId) => {
+    setPreviewUnlockedBadgeIds((prev) =>
+      prev.includes(badgeId) ? prev : [...prev, badgeId]
+    );
+    setPreviewBadgeIds((prev) =>
+      prev.includes(badgeId)
+        ? prev.filter((id) => id !== badgeId)
+        : [...prev, badgeId]
+    );
+  };
 
   const [savedBanner, setSavedBanner] = useState<string | null>(null);
   const notifySaved = (msg: string) => {
@@ -239,7 +301,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setDraftBookId('livro-' + Date.now());
     setPdfBookIdLocked(false);
     setSelectedPdfFile(null);
-    setFormState({ ...EMPTY_BOOK_FORM, readingOptions: {}, ordem: books.length + 1 });
+    setFormState({
+      ...EMPTY_BOOK_FORM,
+      readingOptions: {},
+      ordem: books.length + 1,
+      createdAt: new Date().toISOString(),
+    });
     setGenresInput('');
     setCharactersInput('');
     setKeywordsInput('');
@@ -303,6 +370,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       status: book.status,
       destaque: book.destaque,
       ordem: book.ordem || 1,
+      ...(book.createdAt ? { createdAt: book.createdAt } : {}),
       ...(book.capitulos ? { capitulos: book.capitulos } : {}),
     });
     setPdfUploadStatus(existingPdfOption ? 'available' : 'idle');
@@ -542,6 +610,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       conteudo: ch.conteudo.trim() || formState.descricao,
     }));
 
+    const existingBook = editingId
+      ? books.find((b) => b.id === editingId)
+      : undefined;
+
     const bookToSave: Book = {
       ...formState,
       id,
@@ -549,6 +621,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       personagens: parsedCharacters,
       palavrasChave: parsedKeywords,
       capitulos: sanitizedChapters,
+      createdAt:
+        existingBook?.createdAt ||
+        formState.createdAt ||
+        new Date().toISOString(),
     };
 
     await onSaveBook(bookToSave);
@@ -748,6 +824,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 id: 'usuarios',
                 label: `7. Usuários & Histórico (${registeredUsers.length})`,
                 icon: Users,
+              },
+              {
+                id: 'selos-preview',
+                label: '8. Selos & Animações (Preview)',
+                icon: Award,
               },
             ] as const
           ).map((tab) => {
@@ -3185,6 +3266,428 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 ))}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* ===================================================================
+            TAB 8: SELOS, ANIMAÇÕES DE DESBLOQUEIO & PREVIEW NO PERFIL (EXCLUSIVO ADMIN)
+           =================================================================== */}
+        {activeTab === 'selos-preview' && (
+          <div className="space-y-8">
+            {/* Cabeçalho explicativo */}
+            <div className="rounded-2xl bg-[#071426] border border-blue-400/25 p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div>
+                <div className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-300 mb-1">
+                  <Award className="w-4 h-4 text-amber-400" />
+                  <span>Laboratório Visual Exclusivo do Administrador</span>
+                </div>
+                <h2 className="font-display text-2xl sm:text-3xl font-bold text-white">
+                  Simulador de Animações & Selos no Perfil
+                </h2>
+                <p className="text-xs sm:text-sm text-blue-200/75 mt-1 max-w-3xl">
+                  Teste a animação de revelação em 5 etapas de cada um dos 10 selos literários e visualize em tempo real como os selos, efeitos animados, temas e cores ficam aplicados no perfil do leitor.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleTriggerBadgeAnimation(
+                      previewBadgeIds[0] || 'primeiras_paginas'
+                    )
+                  }
+                  className="inline-flex items-center gap-2 rounded-xl bg-[#2563EB] hover:bg-[#3B82F6] px-4 py-2.5 text-xs sm:text-sm font-bold text-white shadow-lg transition-all cursor-pointer"
+                >
+                  <Play className="w-4 h-4 fill-current" />
+                  <span>Disparar Animação de Selo</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
+              {/* COLUNA ESQUERDA: Galeria dos 10 Selos com botão "Ver Animação" e "Exibir no Perfil" */}
+              <div className="xl:col-span-6 rounded-2xl bg-[#071426] border border-blue-400/20 p-6 space-y-5">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-blue-400/15 pb-4">
+                  <div>
+                    <h3 className="font-display text-xl font-bold text-white">
+                      10 Selos de Conquistas Literárias
+                    </h3>
+                    <p className="text-xs text-blue-200/70 mt-0.5">
+                      Clique em <strong>Ver Animação</strong> para assistir ao desbloqueio ou ative/desative o selo no perfil ao lado.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPreviewUnlockedBadgeIds(ALL_BADGE_IDS);
+                        setPreviewBadgeIds(ALL_BADGE_IDS);
+                      }}
+                      className="rounded-lg bg-blue-500/15 hover:bg-blue-500/25 border border-blue-400/30 px-3 py-1.5 text-xs font-semibold text-[#60A5FA] cursor-pointer"
+                    >
+                      Todos os 10
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPreviewUnlockedBadgeIds(ALL_BADGE_IDS);
+                        setPreviewBadgeIds(ALL_BADGE_IDS.slice(0, 3));
+                      }}
+                      className="rounded-lg bg-[#040D1A] hover:bg-blue-950 border border-blue-400/20 px-3 py-1.5 text-xs font-semibold text-blue-200 cursor-pointer"
+                    >
+                      3 Selos
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewBadgeIds([])}
+                      className="rounded-lg bg-[#040D1A] hover:bg-rose-500/15 border border-blue-400/20 px-3 py-1.5 text-xs font-semibold text-rose-300 cursor-pointer"
+                    >
+                      Limpar
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  {ALL_BADGE_IDS.map((badgeId) => {
+                    const def = BADGE_DEFINITIONS[badgeId];
+                    const isSelectedOnProfile =
+                      previewBadgeIds.includes(badgeId);
+
+                    return (
+                      <div
+                        key={badgeId}
+                        className={`rounded-xl p-3.5 border transition-all flex flex-col justify-between gap-3 ${
+                          isSelectedOnProfile
+                            ? 'bg-[#040D1A] border-[#60A5FA]/55 shadow-[0_0_20px_rgba(37,99,235,0.15)]'
+                            : 'bg-[#040D1A]/65 border-blue-400/15 opacity-80 hover:opacity-100'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="relative shrink-0">
+                            <BadgeImage
+                              badgeId={badgeId}
+                              customBadgeImages={platformSettings.badgeImages}
+                              className="w-14 h-14"
+                            />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <p className="font-display text-sm font-bold text-white truncate">
+                                {def.name}
+                              </p>
+                            </div>
+                            <p className="text-[11px] text-blue-200/70 line-clamp-2 mt-0.5 leading-snug">
+                              {def.achievementDescription}
+                            </p>
+                            <span className="inline-block mt-1 text-[10px] font-mono-num text-amber-300/85">
+                              Formato: {def.shape}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 pt-2 border-t border-blue-400/10">
+                          <button
+                            type="button"
+                            onClick={() => handleTriggerBadgeAnimation(badgeId)}
+                            className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#2563EB] hover:bg-[#3B82F6] px-2.5 py-1.5 text-xs font-bold text-white transition-colors cursor-pointer"
+                          >
+                            <Play className="w-3 h-3 fill-current" />
+                            <span>Ver Animação</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleTogglePreviewBadgeOnProfile(badgeId)
+                            }
+                            className={`inline-flex items-center justify-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold border transition-colors cursor-pointer ${
+                              isSelectedOnProfile
+                                ? 'bg-emerald-500/15 border-emerald-400/40 text-emerald-300'
+                                : 'bg-[#071426] border-blue-400/25 text-blue-200 hover:text-white'
+                            }`}
+                          >
+                            {isSelectedOnProfile ? (
+                              <>
+                                <Check className="w-3.5 h-3.5" />
+                                <span>No Perfil</span>
+                              </>
+                            ) : (
+                              <span>+ Perfil</span>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* COLUNA DIREITA: Pré-visualização ao vivo do Perfil com Selos e Efeitos/Animações */}
+              <div className="xl:col-span-6 space-y-5">
+                {/* Controles Rápidos da Aparência e Efeitos do Perfil */}
+                <div className="rounded-2xl bg-[#071426] border border-blue-400/20 p-5 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="font-display text-lg font-bold text-white">
+                      Controles do Simulador de Perfil
+                    </h3>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPreviewIsOwnerMode((prev) => !prev)
+                        }
+                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold border transition-colors cursor-pointer ${
+                          previewIsOwnerMode
+                            ? 'bg-[#2563EB] border-blue-400 text-white'
+                            : 'bg-[#040D1A] border-blue-400/25 text-blue-200'
+                        }`}
+                      >
+                        {previewIsOwnerMode
+                          ? 'Modo: Dono do Perfil'
+                          : 'Modo: Visitante Público'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setPreviewIsPremium((prev) => !prev)}
+                        className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold border transition-colors cursor-pointer ${
+                          previewIsPremium
+                            ? 'bg-amber-500/20 border-amber-400/45 text-amber-200'
+                            : 'bg-[#040D1A] border-blue-400/25 text-blue-200'
+                        }`}
+                      >
+                        <Crown className="w-3.5 h-3.5 text-amber-400" />
+                        <span>{previewIsPremium ? 'Premium Ativo' : 'Gratuito'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Seletor de Efeitos / Animações Decorativas do Perfil */}
+                  <div>
+                    <label className="block text-xs font-semibold text-blue-200/80 mb-2">
+                      Efeito / Animação Decorativa de Fundo do Perfil:
+                    </label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {DECORATIVE_EFFECT_PRESETS.map((eff) => (
+                        <button
+                          key={eff.id}
+                          type="button"
+                          onClick={() =>
+                            setPreviewCustomization((prev) => ({
+                              ...prev,
+                              effects: eff.id as ProfileEffectId,
+                            }))
+                          }
+                          className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium border transition-all cursor-pointer ${
+                            previewCustomization.effects === eff.id
+                              ? 'bg-[#2563EB] border-blue-300 text-white shadow'
+                              : 'bg-[#040D1A] border-blue-400/20 text-blue-200/80 hover:text-white'
+                          }`}
+                        >
+                          <span>{eff.label}</span>
+                          {eff.isPremium && (
+                            <Crown className="w-3 h-3 text-amber-400 shrink-0" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Seletor de Temas Prontos */}
+                  <div>
+                    <label className="block text-xs font-semibold text-blue-200/80 mb-2">
+                      Tema Visual do Perfil (Fundo + Capa + Efeito):
+                    </label>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPreviewCustomization(DEFAULT_PROFILE_CUSTOMIZATION)
+                        }
+                        className={`rounded-lg px-2.5 py-1.5 text-xs font-medium border transition-all cursor-pointer ${
+                          previewCustomization.theme === 'default'
+                            ? 'bg-[#2563EB] border-blue-300 text-white'
+                            : 'bg-[#040D1A] border-blue-400/20 text-blue-200/80 hover:text-white'
+                        }`}
+                      >
+                        Padrão LIVROFLIX
+                      </button>
+                      {READY_VISUAL_THEMES.map((theme) => (
+                        <button
+                          key={theme.id}
+                          type="button"
+                          onClick={() =>
+                            setPreviewCustomization({
+                              background: theme.background,
+                              banner: theme.banner,
+                              effects: theme.effects,
+                              theme: theme.id,
+                            })
+                          }
+                          className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium border transition-all cursor-pointer ${
+                            previewCustomization.theme === theme.id
+                              ? 'bg-[#2563EB] border-blue-300 text-white'
+                              : 'bg-[#040D1A] border-blue-400/20 text-blue-200/80 hover:text-white'
+                          }`}
+                        >
+                          <span>{theme.label}</span>
+                          {theme.isPremium && (
+                            <Crown className="w-3 h-3 text-amber-400 shrink-0" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Cor do @username */}
+                  {previewIsPremium && (
+                    <div>
+                      <label className="block text-xs font-semibold text-blue-200/80 mb-2">
+                        Cor do Nome de Usuário (@username):
+                      </label>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {USERNAME_COLOR_PRESETS.map((preset) => (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => setPreviewUsernameColor(preset.hex)}
+                            title={preset.label}
+                            className={`h-6 w-6 rounded-full border transition-transform cursor-pointer ${
+                              previewUsernameColor === preset.hex
+                                ? 'scale-125 ring-2 ring-white border-white'
+                                : 'border-white/25 hover:scale-110'
+                            }`}
+                            style={{ backgroundColor: preset.hex }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* CARD DE PRÉ-VISUALIZAÇÃO DO PERFIL COM OS SELOS */}
+                <div
+                  className="relative rounded-3xl border border-blue-400/30 shadow-2xl overflow-hidden p-6 sm:p-8 transition-all duration-500"
+                  style={getProfileBackgroundStyle(previewCustomization)}
+                >
+                  <ProfileDecorativeEffectLayer
+                    effect={previewCustomization.effects}
+                  />
+
+                  <div className="relative z-10 space-y-6">
+                    <div className="flex items-center justify-between">
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-[#040D1A]/85 border border-blue-400/30 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-[#60A5FA]">
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>Pré-visualização do Perfil com Selos</span>
+                      </span>
+                      <span className="text-xs font-mono-num text-blue-200/80 bg-[#040D1A]/80 px-2.5 py-1 rounded-lg border border-blue-400/20">
+                        {previewBadgeIds.length} de 10 selos exibidos
+                      </span>
+                    </div>
+
+                    <div className="relative rounded-2xl bg-[#071426]/90 border border-blue-400/25 p-5 sm:p-6 overflow-hidden shadow-xl">
+                      <ProfileIntegratedBanner
+                        banner={previewCustomization.banner}
+                      />
+
+                      <div className="relative z-10 flex flex-col sm:flex-row items-center sm:items-start gap-5 text-center sm:text-left">
+                        <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full bg-[#040D1A] border-2 border-[#60A5FA] text-[#60A5FA] font-display text-3xl font-bold shadow-lg">
+                          A
+                        </div>
+
+                        <div className="flex-1 min-w-0 w-full">
+                          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                            <div>
+                              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+                                <h4
+                                  className="font-display text-2xl font-bold text-white"
+                                  style={
+                                    previewIsPremium && previewUsernameColor
+                                      ? { color: previewUsernameColor }
+                                      : undefined
+                                  }
+                                >
+                                  @leitor.livroflix
+                                </h4>
+                                {previewIsPremium && (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-400/35 px-2.5 py-0.5 text-[11px] font-bold text-amber-300">
+                                    <Crown className="w-3.5 h-3.5 text-amber-400 fill-amber-400/30" />
+                                    <span>Premium</span>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* EXIBIÇÃO REAL DOS SELOS NO LADO SUPERIOR DIREITO DA CAIXA DO PERFIL */}
+                            <ProfileBadgesShowcase
+                              unlockedBadgeIds={previewUnlockedBadgeIds}
+                              profileBadgeIds={previewBadgeIds}
+                              isOwner={previewIsOwnerMode}
+                              onToggleProfileBadge={
+                                handleTogglePreviewBadgeOnProfile
+                              }
+                              customBadgeImages={platformSettings.badgeImages}
+                            />
+                          </div>
+
+                          <p className="mt-2.5 text-xs sm:text-sm text-blue-100/90 max-w-lg">
+                            Apaixonado por grandes obras clássicas, ficção científica e fantasia épica no catálogo do LIVROFLIX.
+                          </p>
+
+                          <div className="mt-3 pt-3 border-t border-blue-400/15 flex items-center justify-center sm:justify-start gap-5 text-xs text-blue-200/80">
+                            <span>
+                              <strong className="font-mono-num text-white">
+                                48
+                              </strong>{' '}
+                              seguidores
+                            </span>
+                            <span>
+                              <strong className="font-mono-num text-white">
+                                32
+                              </strong>{' '}
+                              seguindo
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal real da animação de formação em 5 estágios do selo selecionado */}
+            {previewAnimationBadgeId && (
+              <BadgeUnlockModal
+                key={`${previewAnimationBadgeId}_${previewAnimationKey}`}
+                achievement={
+                  {
+                    id: BADGE_DEFINITIONS[previewAnimationBadgeId]
+                      .achievementId,
+                    title:
+                      BADGE_DEFINITIONS[previewAnimationBadgeId]
+                        .achievementTitle,
+                    description:
+                      BADGE_DEFINITIONS[previewAnimationBadgeId]
+                        .achievementDescription,
+                    current: 1,
+                    target: 1,
+                    progressPercent: 100,
+                    unlocked: true,
+                    hasBadge: true,
+                    badgeId: previewAnimationBadgeId,
+                  } as EvaluatedAchievement
+                }
+                isDisplayedOnProfile={previewBadgeIds.includes(
+                  previewAnimationBadgeId
+                )}
+                onToggleDisplayOnProfile={handleTogglePreviewBadgeOnProfile}
+                onClose={() => setPreviewAnimationBadgeId(null)}
+                customBadgeImages={platformSettings.badgeImages}
+              />
+            )}
           </div>
         )}
       </div>

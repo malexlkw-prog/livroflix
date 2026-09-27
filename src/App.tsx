@@ -7,6 +7,8 @@ import {
   deleteDoc,
   onSnapshot,
   getDocs,
+  query,
+  where,
 } from 'firebase/firestore';
 import {
   Sparkles,
@@ -33,15 +35,35 @@ import {
 import {
   ActiveView,
   Book,
+  BookReview,
+  CommunityFollow,
+  CommunityLike,
+  CommunityNotification,
+  CommunityPost,
+  CommunityReply,
+  CommunityReport,
   CustomCategory,
   HomeRow,
   PlatformSettings,
+  ProfileCustomization,
+  PublicProfile,
   ReaderPreferences,
   ReadingFormat,
   ReadingStatus,
   UserBookItem,
   UserProfile,
 } from './types';
+import {
+  BadgeId,
+  EvaluatedAchievement,
+  evaluateLiteraryAchievementsAndBadges,
+  isNightHour,
+  isValidBadgeId,
+} from './data/badges';
+import {
+  BadgeUnlockModal,
+  CommonAchievementUnlockedBanner,
+} from './components/BadgeUnlockModal';
 import {
   LEGACY_AUTO_BOOK_IDS,
   DEFAULT_PLATFORM_SETTINGS,
@@ -51,8 +73,9 @@ import { Header, BOOK_CATEGORIES_LIST } from './components/Header';
 import { LivroflixLogo } from './components/LivroflixLogo';
 import { HeroBanner } from './components/HeroBanner';
 import { BookCard } from './components/BookCard';
+import { resolveBookCreatedAtIso } from './components/BookCover';
 import { BookRow } from './components/BookRow';
-import { BookDetailView } from './components/BookDetailView';
+import { BookDetailView, REVIEW_MIN_CHARS } from './components/BookDetailView';
 import { BookReader } from './components/BookReader';
 import { ReadingFormatModal } from './components/ReadingFormatModal';
 import { PdfReaderView } from './components/PdfReaderView';
@@ -62,8 +85,26 @@ import {
   MyLibraryView,
   ProfileView,
   DownloadsView,
+  ProfileUpdateInput,
+  validateUsernameFormat,
+  generateDefaultUsername,
 } from './components/MyLibraryAndProfile';
+import {
+  CommunityView,
+  CreatePostInput,
+  CreateReplyInput,
+  CreateReportInput,
+  extractMentionsFromText,
+  POST_MAX_LENGTH,
+  REPLY_MAX_LENGTH,
+} from './components/CommunityView';
 import { AdminDashboard } from './components/AdminDashboard';
+import { PremiumModal } from './components/PremiumModal';
+import {
+  getMaxProfileFavoriteBooks,
+  isUserPremium,
+  isValidHexColor,
+} from './utils/premiumUtils';
 
 const DEFAULT_READER_PREFS: ReaderPreferences = {
   fontSize: 20,
@@ -75,7 +116,68 @@ const DEFAULT_READER_PREFS: ReaderPreferences = {
 
 const LOCAL_STORAGE_LIB_KEY = 'livroflix_user_library_v1';
 const LOCAL_STORAGE_PREFS_KEY = 'livroflix_reader_prefs_v1';
+const LOCAL_STORAGE_USERNAMES_KEY = 'livroflix_usernames_registry_v1';
+const LOCAL_STORAGE_COMM_POSTS_KEY = 'livroflix_comm_posts_v1';
+const LOCAL_STORAGE_COMM_LIKES_KEY = 'livroflix_comm_likes_v1';
+const LOCAL_STORAGE_COMM_REPLIES_KEY = 'livroflix_comm_replies_v1';
+const LOCAL_STORAGE_COMM_FOLLOWS_KEY = 'livroflix_comm_follows_v1';
+const LOCAL_STORAGE_COMM_NOTIFS_KEY = 'livroflix_comm_notifs_v1';
+const LOCAL_STORAGE_BOOK_REVIEWS_KEY = 'livroflix_book_reviews_v1';
 const LEGACY_AUTO_SET = new Set(LEGACY_AUTO_BOOK_IDS);
+
+function readLocalArray<T>(key: string): T[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed as T[];
+    }
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
+function writeLocalArray<T>(key: string, items: T[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(items));
+  } catch {
+    // ignore
+  }
+}
+
+function getLocalUsernamesRegistry(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_USERNAMES_KEY);
+    if (raw) return JSON.parse(raw) as Record<string, string>;
+  } catch {
+    // ignore
+  }
+  return {};
+}
+
+function saveLocalUsernameOwner(
+  username: string,
+  uid: string,
+  previousUsername?: string
+): void {
+  try {
+    const registry = getLocalUsernamesRegistry();
+    if (
+      previousUsername &&
+      previousUsername !== username &&
+      registry[previousUsername] === uid
+    ) {
+      delete registry[previousUsername];
+    }
+    if (username) {
+      registry[username] = uid;
+    }
+    localStorage.setItem(LOCAL_STORAGE_USERNAMES_KEY, JSON.stringify(registry));
+  } catch {
+    // ignore
+  }
+}
 
 function sanitizeLibraryRecord(
   raw: Record<string, UserBookItem>
@@ -104,6 +206,7 @@ export default function App() {
 
   // Real Catalog, Categories, Home Rows & Platform Settings State
   const [books, setBooks] = useState<Book[]>([]);
+  const [isCatalogLoading, setIsCatalogLoading] = useState<boolean>(true);
   const [customCategories, setCustomCategories] = useState<CustomCategory[]>([]);
   const [homeRows, setHomeRows] = useState<HomeRow[]>(DEFAULT_HOME_ROWS);
   const [platformSettings, setPlatformSettings] = useState<PlatformSettings>(
@@ -117,6 +220,56 @@ export default function App() {
     getSavedSessionProfile()
   );
   const [registeredUsers, setRegisteredUsers] = useState<UserProfile[]>([]);
+  const [publicProfilesMap, setPublicProfilesMap] = useState<
+    Record<string, PublicProfile>
+  >({});
+  const [communityPosts, setCommunityPosts] = useState<CommunityPost[]>(() =>
+    readLocalArray<CommunityPost>(LOCAL_STORAGE_COMM_POSTS_KEY)
+  );
+  const [communityLikes, setCommunityLikes] = useState<CommunityLike[]>(() =>
+    readLocalArray<CommunityLike>(LOCAL_STORAGE_COMM_LIKES_KEY)
+  );
+  const [communityReplies, setCommunityReplies] = useState<CommunityReply[]>(
+    () => readLocalArray<CommunityReply>(LOCAL_STORAGE_COMM_REPLIES_KEY)
+  );
+  const [communityFollows, setCommunityFollows] = useState<CommunityFollow[]>(
+    () => readLocalArray<CommunityFollow>(LOCAL_STORAGE_COMM_FOLLOWS_KEY)
+  );
+  const [communityNotifications, setCommunityNotifications] = useState<
+    CommunityNotification[]
+  >(() => readLocalArray<CommunityNotification>(LOCAL_STORAGE_COMM_NOTIFS_KEY));
+  const [communityReports, setCommunityReports] = useState<CommunityReport[]>(
+    []
+  );
+  const [bookReviews, setBookReviews] = useState<BookReview[]>(() =>
+    readLocalArray<BookReview>(LOCAL_STORAGE_BOOK_REVIEWS_KEY)
+  );
+  const [scrollToReviewsOnDetail, setScrollToReviewsOnDetail] =
+    useState<boolean>(false);
+
+  useEffect(() => {
+    writeLocalArray(LOCAL_STORAGE_BOOK_REVIEWS_KEY, bookReviews);
+  }, [bookReviews]);
+
+  useEffect(() => {
+    writeLocalArray(LOCAL_STORAGE_COMM_POSTS_KEY, communityPosts);
+  }, [communityPosts]);
+
+  useEffect(() => {
+    writeLocalArray(LOCAL_STORAGE_COMM_LIKES_KEY, communityLikes);
+  }, [communityLikes]);
+
+  useEffect(() => {
+    writeLocalArray(LOCAL_STORAGE_COMM_REPLIES_KEY, communityReplies);
+  }, [communityReplies]);
+
+  useEffect(() => {
+    writeLocalArray(LOCAL_STORAGE_COMM_FOLLOWS_KEY, communityFollows);
+  }, [communityFollows]);
+
+  useEffect(() => {
+    writeLocalArray(LOCAL_STORAGE_COMM_NOTIFS_KEY, communityNotifications);
+  }, [communityNotifications]);
   const [userLibrary, setUserLibrary] = useState<Record<string, UserBookItem>>(() => {
     try {
       const saved = localStorage.getItem(LOCAL_STORAGE_LIB_KEY);
@@ -162,13 +315,25 @@ export default function App() {
       'user-' + cleanEmail.replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     const userRef = doc(db, 'users', deterministicUid);
 
+    const initialName =
+      nameInput?.trim() ||
+      (isOwnerAdmin ? 'Marcos Leandro' : cleanEmail.split('@')[0]);
+    const defaultUsername = generateDefaultUsername({
+      uid: deterministicUid,
+      nome: initialName,
+      displayName: initialName,
+      email: cleanEmail,
+    });
+
     let finalProfile: UserProfile = {
       uid: deterministicUid,
-      nome:
-        nameInput?.trim() ||
-        (isOwnerAdmin ? 'Marcos Leandro' : cleanEmail.split('@')[0]),
+      nome: initialName,
+      displayName: initialName,
+      username: defaultUsername,
+      bio: '',
       email: cleanEmail,
       foto: '',
+      photoURL: '',
       role: isOwnerAdmin ? 'admin' : 'user',
       streakDays: 0,
       totalMinutesRead: 0,
@@ -180,14 +345,33 @@ export default function App() {
       const existingSnap = await getDoc(userRef);
       if (existingSnap.exists()) {
         const existingData = existingSnap.data() as UserProfile;
+        const resolvedName =
+          nameInput?.trim() ||
+          existingData.displayName ||
+          existingData.nome ||
+          initialName;
+        const resolvedPhoto =
+          'photoURL' in existingData || 'foto' in existingData
+            ? (existingData.photoURL ?? existingData.foto ?? '')
+            : '';
+        const resolvedUsername =
+          existingData.username ||
+          generateDefaultUsername({
+            uid: deterministicUid,
+            nome: resolvedName,
+            displayName: resolvedName,
+            email: cleanEmail,
+          });
         finalProfile = stripUndefined({
           ...existingData,
           uid: deterministicUid,
-          nome:
-            nameInput?.trim() ||
-            existingData.nome ||
-            (isOwnerAdmin ? 'Marcos Leandro' : cleanEmail.split('@')[0]),
+          nome: resolvedName,
+          displayName: resolvedName,
+          username: resolvedUsername,
+          bio: typeof existingData.bio === 'string' ? existingData.bio : '',
           email: cleanEmail,
+          foto: resolvedPhoto,
+          photoURL: resolvedPhoto,
           role: isOwnerAdmin ? 'admin' : existingData.role || 'user',
           preferenciasLeitor: existingData.preferenciasLeitor || readerPrefs,
           updatedAt: new Date().toISOString(),
@@ -202,6 +386,9 @@ export default function App() {
       );
     }
 
+    if (finalProfile.username) {
+      saveLocalUsernameOwner(finalProfile.username, finalProfile.uid);
+    }
     saveSessionProfile(finalProfile);
     setUserProfile(finalProfile);
   };
@@ -224,16 +411,38 @@ export default function App() {
               existingData.streakDays === 7 &&
               existingData.totalMinutesRead === 540;
 
+            const resolvedName =
+              existingData.displayName ||
+              existingData.nome ||
+              user.displayName ||
+              user.email?.split('@')[0] ||
+              'Leitor LIVROFLIX';
+            const hasSavedPhoto =
+              'photoURL' in existingData || 'foto' in existingData;
+            const resolvedPhoto = hasSavedPhoto
+              ? (existingData.photoURL ?? existingData.foto ?? '')
+              : (user.photoURL || '');
+            const resolvedUsername =
+              existingData.username ||
+              generateDefaultUsername({
+                uid: user.uid,
+                nome: resolvedName,
+                displayName: resolvedName,
+                email: user.email || existingData.email || '',
+              });
+            const resolvedBio =
+              typeof existingData.bio === 'string' ? existingData.bio : '';
+
             const updatedProfile: UserProfile = stripUndefined({
               ...existingData,
               uid: user.uid,
-              nome:
-                existingData.nome ||
-                user.displayName ||
-                user.email?.split('@')[0] ||
-                'Leitor LIVROFLIX',
+              nome: resolvedName,
+              displayName: resolvedName,
+              username: resolvedUsername,
+              bio: resolvedBio,
               email: user.email || existingData.email || '',
-              foto: existingData.foto || user.photoURL || '',
+              foto: resolvedPhoto,
+              photoURL: resolvedPhoto,
               role: isOwnerAdmin ? 'admin' : existingData.role || 'user',
               streakDays: wasLegacyFakeStats
                 ? 0
@@ -246,29 +455,54 @@ export default function App() {
                 ? existingData.totalMinutesRead
                 : 0,
               preferenciasLeitor: existingData.preferenciasLeitor || readerPrefs,
-              updatedAt: new Date().toISOString(),
+              updatedAt: existingData.updatedAt || new Date().toISOString(),
             });
+            if (updatedProfile.username) {
+              saveLocalUsernameOwner(updatedProfile.username, user.uid);
+            }
             saveSessionProfile(updatedProfile);
             setUserProfile(updatedProfile);
             if (existingData.preferenciasLeitor) {
               setReaderPrefs(existingData.preferenciasLeitor);
             }
-            await setDoc(userRef, updatedProfile, { merge: true });
+            // Only write back if key normalized fields were missing
+            if (
+              !existingData.displayName ||
+              !existingData.username ||
+              wasLegacyFakeStats
+            ) {
+              await setDoc(userRef, updatedProfile, { merge: true });
+            }
           } else {
+            const initialName =
+              user.displayName ||
+              user.email?.split('@')[0] ||
+              'Leitor LIVROFLIX';
+            const initialPhoto = user.photoURL || '';
+            const initialUsername = generateDefaultUsername({
+              uid: user.uid,
+              nome: initialName,
+              displayName: initialName,
+              email: user.email || '',
+            });
             const newProfile: UserProfile = stripUndefined({
               uid: user.uid,
-              nome:
-                user.displayName ||
-                user.email?.split('@')[0] ||
-                'Leitor LIVROFLIX',
+              nome: initialName,
+              displayName: initialName,
+              username: initialUsername,
+              bio: '',
               email: user.email || '',
-              foto: user.photoURL || '',
+              foto: initialPhoto,
+              photoURL: initialPhoto,
               role: isOwnerAdmin ? 'admin' : 'user',
               streakDays: 0,
               totalMinutesRead: 0,
               preferenciasLeitor: readerPrefs,
               updatedAt: new Date().toISOString(),
             });
+            if (newProfile.username) {
+              saveLocalUsernameOwner(newProfile.username, user.uid);
+            }
             saveSessionProfile(newProfile);
             setUserProfile(newProfile);
             await setDoc(userRef, newProfile, { merge: true });
@@ -293,6 +527,41 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  // 1b. Real-time sync of current user's profile document (/users/{activeUserId})
+  useEffect(() => {
+    if (!firebaseUser?.uid) return;
+    const uid = firebaseUser.uid;
+    const userRef = doc(db, 'users', uid);
+    const unsubscribe = onSnapshot(
+      userRef,
+      (snap) => {
+        if (!snap.exists()) return;
+        const data = snap.data() as UserProfile;
+        const resolvedName =
+          data.displayName || data.nome || 'Leitor LIVROFLIX';
+        const hasSavedPhoto = 'photoURL' in data || 'foto' in data;
+        const resolvedPhoto = hasSavedPhoto
+          ? (data.photoURL ?? data.foto ?? '')
+          : '';
+        const syncedProfile: UserProfile = stripUndefined({
+          ...data,
+          uid,
+          nome: resolvedName,
+          displayName: resolvedName,
+          foto: resolvedPhoto,
+          photoURL: resolvedPhoto,
+          bio: typeof data.bio === 'string' ? data.bio : '',
+        });
+        saveSessionProfile(syncedProfile);
+        setUserProfile(syncedProfile);
+      },
+      () => {
+        // Ignore snapshot errors if rules are transitioning
+      }
+    );
+    return () => unsubscribe();
+  }, [firebaseUser?.uid]);
 
   // 2. Sync Global Platform Settings (/settings/platform)
   useEffect(() => {
@@ -352,23 +621,41 @@ export default function App() {
 
   // 4. Sync Real Books Catalog from Firestore (/books) — excluding any legacy auto-created book IDs
   useEffect(() => {
+    const fallbackTimer = setTimeout(() => {
+      setIsCatalogLoading(false);
+    }, 3500);
+
     const unsubscribe = onSnapshot(
       collection(db, 'books'),
       (snapshot) => {
         const realBooks: Book[] = [];
         snapshot.forEach((docSnap) => {
           if (!LEGACY_AUTO_SET.has(docSnap.id)) {
-            realBooks.push(docSnap.data() as Book);
+            const rawBook = docSnap.data() as Book;
+            const resolvedCreatedAt = resolveBookCreatedAtIso({
+              ...rawBook,
+              id: rawBook.id || docSnap.id,
+            });
+            realBooks.push({
+              ...rawBook,
+              id: rawBook.id || docSnap.id,
+              ...(resolvedCreatedAt ? { createdAt: resolvedCreatedAt } : {}),
+            });
           }
         });
         realBooks.sort((a, b) => (a.ordem || 99) - (b.ordem || 99));
         setBooks(realBooks);
+        setIsCatalogLoading(false);
       },
       (error) => {
+        setIsCatalogLoading(false);
         handleFirestoreError(error, OperationType.LIST, 'books');
       }
     );
-    return () => unsubscribe();
+    return () => {
+      clearTimeout(fallbackTimer);
+      unsubscribe();
+    };
   }, []);
 
   // 5. Purge Legacy Auto-Created Books from Firestore (/books) when Admin is authenticated
@@ -378,11 +665,23 @@ export default function App() {
 
     const purgeAutoCreatedBooksAndSeedStructure = async () => {
       try {
-        // Delete any legacy auto-seeded books from /books in Firestore
+        // Delete any legacy auto-seeded books from /books in Firestore & backfill missing createdAt
         const booksSnap = await getDocs(collection(db, 'books'));
         for (const docSnap of booksSnap.docs) {
           if (LEGACY_AUTO_SET.has(docSnap.id)) {
             await deleteDoc(doc(db, 'books', docSnap.id));
+          } else {
+            const data = docSnap.data() as Book;
+            if (!data.createdAt) {
+              const resolvedCreatedAt =
+                resolveBookCreatedAtIso({ ...data, id: data.id || docSnap.id }) ||
+                new Date().toISOString();
+              await setDoc(
+                doc(db, 'books', docSnap.id),
+                { createdAt: resolvedCreatedAt },
+                { merge: true }
+              );
+            }
           }
         }
 
@@ -468,6 +767,444 @@ export default function App() {
       });
   }, [isAdmin, activeUserId, activeView]);
 
+  // 9. Sync current user's PublicProfile (/public_profiles/{uid}) so Community cards & @mentions stay up-to-date
+  useEffect(() => {
+    if (!userProfile?.uid) return;
+    const displayName =
+      userProfile.displayName || userProfile.nome || 'Leitor LIVROFLIX';
+    const username = (
+      userProfile.username ||
+      generateDefaultUsername(userProfile)
+    )
+      .replace(/^@+/, '')
+      .toLowerCase();
+    const photoURL = userProfile.photoURL ?? userProfile.foto ?? '';
+    const bio = userProfile.bio || '';
+    const resolvedFavIds = Array.isArray(userProfile.profileFavoriteBooks)
+      ? userProfile.profileFavoriteBooks.slice(0, 5)
+      : Array.isArray(userProfile.favoriteBooks)
+      ? userProfile.favoriteBooks.slice(0, 5)
+      : undefined;
+    const resolvedUnlockedBadges = Array.isArray(userProfile.unlockedBadges)
+      ? userProfile.unlockedBadges.filter(isValidBadgeId).slice(0, 10)
+      : undefined;
+    const resolvedProfileBadges = Array.isArray(userProfile.profileBadges)
+      ? userProfile.profileBadges
+          .filter(
+            (id): id is BadgeId =>
+              isValidBadgeId(id) &&
+              Boolean(resolvedUnlockedBadges?.includes(id))
+          )
+          .slice(0, 10)
+      : undefined;
+    const resolvedUsernameColor =
+      userProfile.usernameColor ||
+      userProfile.profileCustomization?.usernameColor;
+    const pubProfile: PublicProfile = stripUndefined({
+      uid: userProfile.uid,
+      displayName,
+      username,
+      bio,
+      photoURL,
+      premium: Boolean(userProfile.premium),
+      usernameColor: isValidHexColor(resolvedUsernameColor)
+        ? resolvedUsernameColor
+        : undefined,
+      profileCustomization: userProfile.profileCustomization,
+      favoriteBooks: resolvedFavIds,
+      profileFavoriteBooks: resolvedFavIds,
+      unlockedBadges: resolvedUnlockedBadges,
+      profileBadges: resolvedProfileBadges,
+      updatedAt: userProfile.updatedAt || new Date().toISOString(),
+    });
+
+    setPublicProfilesMap((prev) => ({
+      ...prev,
+      [userProfile.uid]: pubProfile,
+    }));
+
+    if (firebaseUser && firebaseUser.uid === userProfile.uid) {
+      setDoc(
+        doc(db, 'public_profiles', userProfile.uid),
+        stripUndefined(pubProfile),
+        { merge: true }
+      ).catch(() => {});
+    }
+  }, [
+    firebaseUser,
+    userProfile?.uid,
+    userProfile?.displayName,
+    userProfile?.nome,
+    userProfile?.username,
+    userProfile?.bio,
+    userProfile?.photoURL,
+    userProfile?.foto,
+    userProfile?.premium,
+    userProfile?.usernameColor,
+    userProfile?.profileCustomization,
+    userProfile?.favoriteBooks,
+    userProfile?.profileFavoriteBooks,
+    userProfile?.unlockedBadges,
+    userProfile?.profileBadges,
+    userProfile?.updatedAt,
+  ]);
+
+  // 9b. Automatically evaluate literary achievements and unlock corresponding badges
+  const [badgeUnlockQueue, setBadgeUnlockQueue] = useState<
+    EvaluatedAchievement[]
+  >([]);
+  const [commonAchievementQueue, setCommonAchievementQueue] = useState<
+    EvaluatedAchievement[]
+  >([]);
+  const seenAchievementsRef = useRef<{ uid: string; ids: Set<string> } | null>(
+    null
+  );
+  const userActionTriggeredRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (!userProfile?.uid) return;
+    const uid = userProfile.uid;
+    const storageKey = `livroflix_seen_achievements_${uid}`;
+
+    const { achievements, computedUnlockedBadgeIds } =
+      evaluateLiteraryAchievementsAndBadges(books, userLibrary, userProfile);
+
+    const existingUnlocked = Array.isArray(userProfile.unlockedBadges)
+      ? userProfile.unlockedBadges.filter(isValidBadgeId)
+      : [];
+    const existingSet = new Set<BadgeId>(existingUnlocked);
+
+    // Initialize baseline for this user on first evaluation (never animate on initial load/refresh)
+    if (
+      !seenAchievementsRef.current ||
+      seenAchievementsRef.current.uid !== uid
+    ) {
+      let storedIds: string[] = [];
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) storedIds = parsed;
+        }
+      } catch {
+        // ignore storage errors
+      }
+
+      const initialSeen = new Set<string>(storedIds);
+      for (const ach of achievements) {
+        if (
+          ach.unlocked ||
+          (ach.hasBadge && ach.badgeId && existingSet.has(ach.badgeId))
+        ) {
+          initialSeen.add(ach.id);
+        }
+      }
+
+      seenAchievementsRef.current = { uid, ids: initialSeen };
+      try {
+        localStorage.setItem(
+          storageKey,
+          JSON.stringify(Array.from(initialSeen))
+        );
+      } catch {
+        // ignore storage errors
+      }
+    } else {
+      // Subsequent evaluation during active session
+      const seenSet = seenAchievementsRef.current.ids;
+      const newlyUnlockedWithBadge: EvaluatedAchievement[] = [];
+      const newlyUnlockedWithoutBadge: EvaluatedAchievement[] = [];
+      let seenChanged = false;
+
+      for (const ach of achievements) {
+        if (ach.unlocked && !seenSet.has(ach.id)) {
+          seenSet.add(ach.id);
+          seenChanged = true;
+
+          // Only trigger unlock modals/banners if unlocked following a user action in this session
+          // and not already present in userProfile.unlockedBadges
+          if (userActionTriggeredRef.current) {
+            if (ach.hasBadge && ach.badgeId) {
+              if (!existingSet.has(ach.badgeId)) {
+                newlyUnlockedWithBadge.push(ach);
+              }
+            } else {
+              newlyUnlockedWithoutBadge.push(ach);
+            }
+          }
+        }
+      }
+
+      if (seenChanged) {
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(Array.from(seenSet)));
+        } catch {
+          // ignore storage errors
+        }
+      }
+
+      if (newlyUnlockedWithBadge.length > 0) {
+        setBadgeUnlockQueue((prev) => {
+          const existingQueueIds = new Set(prev.map((a) => a.id));
+          const toAdd = newlyUnlockedWithBadge.filter(
+            (a) => !existingQueueIds.has(a.id)
+          );
+          return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
+        });
+      }
+
+      if (newlyUnlockedWithoutBadge.length > 0) {
+        setCommonAchievementQueue((prev) => {
+          const existingQueueIds = new Set(prev.map((a) => a.id));
+          const toAdd = newlyUnlockedWithoutBadge.filter(
+            (a) => !existingQueueIds.has(a.id)
+          );
+          return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
+        });
+      }
+    }
+
+    const hasNewBadge = computedUnlockedBadgeIds.some(
+      (id) => !existingSet.has(id)
+    );
+
+    if (!hasNewBadge) return;
+
+    const mergedUnlocked = Array.from(
+      new Set<BadgeId>([...existingUnlocked, ...computedUnlockedBadgeIds])
+    ).slice(0, 10);
+
+    // Preserve user's chosen profileBadges (validating against mergedUnlocked)
+    const currentProfileBadges = Array.isArray(userProfile.profileBadges)
+      ? userProfile.profileBadges.filter(
+          (id): id is BadgeId =>
+            isValidBadgeId(id) && mergedUnlocked.includes(id)
+        )
+      : [];
+
+    const nowIso = new Date().toISOString();
+    const targetUid = firebaseUser?.uid || userProfile.uid;
+    const updatedProfile: UserProfile = stripUndefined({
+      ...userProfile,
+      uid: userProfile.uid,
+      unlockedBadges: mergedUnlocked,
+      profileBadges: currentProfileBadges,
+      updatedAt: nowIso,
+    });
+
+    saveSessionProfile(updatedProfile);
+    setUserProfile(updatedProfile);
+    setRegisteredUsers((prev) =>
+      prev.map((u) => (u.uid === targetUid ? updatedProfile : u))
+    );
+
+    setDoc(
+      doc(db, 'users', targetUid),
+      {
+        uid: targetUid,
+        unlockedBadges: mergedUnlocked,
+        profileBadges: currentProfileBadges,
+        updatedAt: nowIso,
+      },
+      { merge: true }
+    ).catch(() => {});
+  }, [books, userLibrary, userProfile, firebaseUser]);
+
+  // 10. Real-time Subscriptions for Community Collections
+  useEffect(() => {
+    const unsubProfiles = onSnapshot(
+      collection(db, 'public_profiles'),
+      (snap) => {
+        const nextMap: Record<string, PublicProfile> = {};
+        snap.forEach((d) => {
+          const data = d.data() as PublicProfile;
+          const uid = data.uid || d.id;
+          nextMap[uid] = { ...data, uid };
+        });
+        setPublicProfilesMap((prev) => ({ ...prev, ...nextMap }));
+      },
+      () => {}
+    );
+
+    const unsubPosts = onSnapshot(
+      collection(db, 'community_posts'),
+      (snap) => {
+        const list: CommunityPost[] = [];
+        const remoteIds = new Set<string>();
+        snap.forEach((d) => {
+          const data = d.data() as CommunityPost;
+          const id = data.id || d.id;
+          remoteIds.add(id);
+          list.push({ ...data, id });
+        });
+        setCommunityPosts((prev) => {
+          const merged = firebaseUser
+            ? list
+            : [...list, ...prev.filter((p) => !remoteIds.has(p.id))];
+          return merged.sort((a, b) =>
+            (b.createdAt || '').localeCompare(a.createdAt || '')
+          );
+        });
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'community_posts');
+      }
+    );
+
+    const unsubLikes = onSnapshot(
+      collection(db, 'community_likes'),
+      (snap) => {
+        const list: CommunityLike[] = [];
+        const remoteIds = new Set<string>();
+        snap.forEach((d) => {
+          const data = d.data() as CommunityLike;
+          const id = data.id || d.id;
+          remoteIds.add(id);
+          list.push({ ...data, id });
+        });
+        setCommunityLikes((prev) =>
+          firebaseUser
+            ? list
+            : [...list, ...prev.filter((l) => !remoteIds.has(l.id))]
+        );
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'community_likes');
+      }
+    );
+
+    const unsubReplies = onSnapshot(
+      collection(db, 'community_replies'),
+      (snap) => {
+        const list: CommunityReply[] = [];
+        const remoteIds = new Set<string>();
+        snap.forEach((d) => {
+          const data = d.data() as CommunityReply;
+          const id = data.id || d.id;
+          remoteIds.add(id);
+          list.push({ ...data, id });
+        });
+        setCommunityReplies((prev) => {
+          const merged = firebaseUser
+            ? list
+            : [...list, ...prev.filter((r) => !remoteIds.has(r.id))];
+          return merged.sort((a, b) =>
+            (a.createdAt || '').localeCompare(b.createdAt || '')
+          );
+        });
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'community_replies');
+      }
+    );
+
+    const unsubFollows = onSnapshot(
+      collection(db, 'community_follows'),
+      (snap) => {
+        const list: CommunityFollow[] = [];
+        const remoteIds = new Set<string>();
+        snap.forEach((d) => {
+          const data = d.data() as CommunityFollow;
+          const id = data.id || d.id;
+          remoteIds.add(id);
+          list.push({ ...data, id });
+        });
+        setCommunityFollows((prev) =>
+          firebaseUser
+            ? list
+            : [...list, ...prev.filter((f) => !remoteIds.has(f.id))]
+        );
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'community_follows');
+      }
+    );
+
+    const unsubBookReviews = onSnapshot(
+      collection(db, 'book_reviews'),
+      (snap) => {
+        const list: BookReview[] = [];
+        const remoteIds = new Set<string>();
+        snap.forEach((d) => {
+          const data = d.data() as BookReview;
+          const id = data.id || d.id;
+          if (id && data.bookId && data.userId && data.text) {
+            remoteIds.add(id);
+            list.push({ ...data, id });
+          }
+        });
+        setBookReviews((prev) => {
+          const merged = firebaseUser
+            ? list
+            : [...list, ...prev.filter((r) => !remoteIds.has(r.id))];
+          return merged.sort((a, b) =>
+            (b.createdAt || '').localeCompare(a.createdAt || '')
+          );
+        });
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'book_reviews');
+      }
+    );
+
+    return () => {
+      unsubProfiles();
+      unsubPosts();
+      unsubLikes();
+      unsubReplies();
+      unsubFollows();
+      unsubBookReviews();
+    };
+  }, [firebaseUser]);
+
+  // 11. Real-time Subscription for Current User's Community Notifications (/community_notifications)
+  useEffect(() => {
+    if (!firebaseUser?.uid) {
+      setCommunityNotifications([]);
+      return;
+    }
+    const q = query(
+      collection(db, 'community_notifications'),
+      where('recipientId', '==', firebaseUser.uid)
+    );
+    const unsubNotifs = onSnapshot(
+      q,
+      (snap) => {
+        const list: CommunityNotification[] = [];
+        snap.forEach((d) => {
+          const data = d.data() as CommunityNotification;
+          list.push({ ...data, id: data.id || d.id });
+        });
+        list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+        setCommunityNotifications(list);
+      },
+      () => {}
+    );
+    return () => unsubNotifs();
+  }, [firebaseUser?.uid]);
+
+  // 12. Real-time Subscription for Community Reports (Admin only)
+  useEffect(() => {
+    if (!isAdmin || !firebaseUser) {
+      setCommunityReports([]);
+      return;
+    }
+    const unsubReports = onSnapshot(
+      collection(db, 'community_reports'),
+      (snap) => {
+        const list: CommunityReport[] = [];
+        snap.forEach((d) => {
+          const data = d.data() as CommunityReport;
+          list.push({ ...data, id: data.id || d.id });
+        });
+        list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+        setCommunityReports(list);
+      },
+      () => {}
+    );
+    return () => unsubReports();
+  }, [isAdmin, firebaseUser]);
+
   // Helper to persist a single UserBookItem
   const saveUserBookItem = async (updatedItem: UserBookItem) => {
     const nextLibrary = {
@@ -517,37 +1254,264 @@ export default function App() {
     };
   };
 
+  const persistProfileFavoriteBookIds = async (nextRawIds: string[]) => {
+    if (!userProfile) return;
+    const seen = new Set<string>();
+    const cleanIds: string[] = [];
+    for (const id of nextRawIds) {
+      if (typeof id === 'string' && id.trim() && !seen.has(id)) {
+        seen.add(id);
+        cleanIds.push(id);
+        if (cleanIds.length === 5) break;
+      }
+    }
+
+    const targetUid = firebaseUser?.uid || userProfile.uid;
+    const nowIso = new Date().toISOString();
+    const updatedProfile: UserProfile = stripUndefined({
+      ...userProfile,
+      uid: userProfile.uid,
+      favoriteBooks: cleanIds,
+      profileFavoriteBooks: cleanIds,
+      updatedAt: nowIso,
+    });
+
+    saveSessionProfile(updatedProfile);
+    setUserProfile(updatedProfile);
+    setRegisteredUsers((prev) =>
+      prev.map((u) => (u.uid === targetUid ? updatedProfile : u))
+    );
+
+    const displayName =
+      updatedProfile.displayName || updatedProfile.nome || 'Leitor LIVROFLIX';
+    const username = (
+      updatedProfile.username || generateDefaultUsername(updatedProfile)
+    )
+      .replace(/^@+/, '')
+      .toLowerCase();
+    const photoURL = updatedProfile.photoURL ?? updatedProfile.foto ?? '';
+    const bio = updatedProfile.bio || '';
+
+    const updatedPubProfile: PublicProfile = stripUndefined({
+      uid: targetUid,
+      displayName,
+      username,
+      bio,
+      photoURL,
+      premium: Boolean(updatedProfile.premium),
+      usernameColor: updatedProfile.usernameColor,
+      profileCustomization: updatedProfile.profileCustomization,
+      favoriteBooks: cleanIds,
+      profileFavoriteBooks: cleanIds,
+      updatedAt: nowIso,
+    });
+
+    setPublicProfilesMap((prev) => ({
+      ...prev,
+      [targetUid]: updatedPubProfile,
+    }));
+
+    if (firebaseUser) {
+      try {
+        await setDoc(
+          doc(db, 'users', targetUid),
+          {
+            uid: targetUid,
+            favoriteBooks: cleanIds,
+            profileFavoriteBooks: cleanIds,
+            updatedAt: nowIso,
+          },
+          { merge: true }
+        );
+        setDoc(
+          doc(db, 'public_profiles', targetUid),
+          stripUndefined(updatedPubProfile),
+          { merge: true }
+        ).catch(() => {});
+      } catch (error) {
+        handleFirestoreError(
+          error,
+          OperationType.UPDATE,
+          `users/${targetUid}`
+        );
+      }
+    } else {
+      setDoc(
+        doc(db, 'users', targetUid),
+        {
+          uid: targetUid,
+          favoriteBooks: cleanIds,
+          profileFavoriteBooks: cleanIds,
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      ).catch(() => {});
+    }
+  };
+
+  const removeBookFromProfileFavoritesIfPresent = (bookId: string) => {
+    if (!userProfile) return;
+    const currentIds = Array.isArray(userProfile.profileFavoriteBooks)
+      ? userProfile.profileFavoriteBooks
+      : Array.isArray(userProfile.favoriteBooks)
+      ? userProfile.favoriteBooks
+      : [];
+    if (currentIds.includes(bookId)) {
+      void persistProfileFavoriteBookIds(
+        currentIds.filter((id) => id !== bookId)
+      );
+    }
+  };
+
+  const handleToggleProfileFavoriteBook = (book: Book) => {
+    if (!userProfile) return;
+    const item = userLibrary[book.id];
+    const isInFavorites =
+      Boolean(item) &&
+      (item.inMyList || item.isFavorite || item.status === 'quero_ler');
+    if (!isInFavorites) return;
+
+    const rawCurrentIds = Array.isArray(userProfile.profileFavoriteBooks)
+      ? userProfile.profileFavoriteBooks
+      : Array.isArray(userProfile.favoriteBooks)
+      ? userProfile.favoriteBooks
+      : [];
+    // Keep only books that are still in the user's favorites
+    const currentValidIds = rawCurrentIds.filter((id) => {
+      const libItem = userLibrary[id];
+      return (
+        Boolean(libItem) &&
+        (libItem.inMyList ||
+          libItem.isFavorite ||
+          libItem.status === 'quero_ler')
+      );
+    });
+
+    const maxProfileFavorites = getMaxProfileFavoriteBooks(userProfile);
+
+    if (currentValidIds.includes(book.id)) {
+      // Unselect from profile without removing from Minha lista
+      void persistProfileFavoriteBookIds(
+        currentValidIds.filter((id) => id !== book.id)
+      );
+    } else {
+      if (currentValidIds.length >= maxProfileFavorites) {
+        if (!isUserPremium(userProfile)) {
+          setVipModalOpen(true);
+        }
+        return;
+      }
+      void persistProfileFavoriteBookIds([...currentValidIds, book.id]);
+    }
+  };
+
+  const handleToggleProfileBadge = async (badgeId: BadgeId) => {
+    if (!userProfile || !isValidBadgeId(badgeId)) return;
+    const { computedUnlockedBadgeIds } = evaluateLiteraryAchievementsAndBadges(
+      books,
+      userLibrary,
+      userProfile
+    );
+    const existingUnlocked = Array.isArray(userProfile.unlockedBadges)
+      ? userProfile.unlockedBadges.filter(isValidBadgeId)
+      : [];
+    const unlockedSet = new Set<BadgeId>([
+      ...existingUnlocked,
+      ...computedUnlockedBadgeIds,
+    ]);
+
+    // Security check: user can only display badges they have genuinely unlocked
+    if (!unlockedSet.has(badgeId)) return;
+
+    const allUnlocked = Array.from(unlockedSet).slice(0, 10);
+    const currentProfileBadges = Array.isArray(userProfile.profileBadges)
+      ? userProfile.profileBadges.filter(
+          (id): id is BadgeId => isValidBadgeId(id) && unlockedSet.has(id)
+        )
+      : [];
+
+    const nextProfileBadges = currentProfileBadges.includes(badgeId)
+      ? currentProfileBadges.filter((id) => id !== badgeId)
+      : [...currentProfileBadges, badgeId].slice(0, 10);
+
+    const targetUid = firebaseUser?.uid || userProfile.uid;
+    const nowIso = new Date().toISOString();
+    const updatedProfile: UserProfile = stripUndefined({
+      ...userProfile,
+      uid: userProfile.uid,
+      unlockedBadges: allUnlocked,
+      profileBadges: nextProfileBadges,
+      updatedAt: nowIso,
+    });
+
+    saveSessionProfile(updatedProfile);
+    setUserProfile(updatedProfile);
+    setRegisteredUsers((prev) =>
+      prev.map((u) => (u.uid === targetUid ? updatedProfile : u))
+    );
+
+    setDoc(
+      doc(db, 'users', targetUid),
+      {
+        uid: targetUid,
+        unlockedBadges: allUnlocked,
+        profileBadges: nextProfileBadges,
+        updatedAt: nowIso,
+      },
+      { merge: true }
+    ).catch(() => {});
+  };
+
   // User Actions on Books
   const handleToggleList = (book: Book, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    userActionTriggeredRef.current = true;
     const current = getOrInitUserItem(book);
     const nextInList = !current.inMyList;
 
     saveUserBookItem({
       ...current,
       inMyList: nextInList,
-      isFavorite: nextInList ? true : current.isFavorite,
+      isFavorite: nextInList ? true : false,
+      status:
+        !nextInList && current.status === 'quero_ler'
+          ? 'nenhum'
+          : current.status,
       ultimoAcesso: new Date().toISOString(),
     });
+
+    if (!nextInList) {
+      removeBookFromProfileFavoritesIfPresent(book.id);
+    }
   };
 
   const handleToggleFavorite = (book: Book) => {
+    userActionTriggeredRef.current = true;
     const current = getOrInitUserItem(book);
     const nextFav = !current.isFavorite;
     saveUserBookItem({
       ...current,
       isFavorite: nextFav,
-      inMyList: nextFav ? true : current.inMyList,
+      inMyList: nextFav ? true : false,
       status: !nextFav && current.status === 'quero_ler' ? 'nenhum' : current.status,
       ultimoAcesso: new Date().toISOString(),
     });
+
+    if (!nextFav) {
+      removeBookFromProfileFavoritesIfPresent(book.id);
+    }
   };
 
   const handleToggleDownload = (book: Book) => {
-    downloadBookPdf(book).catch(() => {});
+    if (!isUserPremium(userProfile)) {
+      setVipModalOpen(true);
+      return;
+    }
+    downloadBookPdf(book, userProfile).catch(() => {});
   };
 
   const handleChangeStatus = (book: Book, status: ReadingStatus) => {
+    userActionTriggeredRef.current = true;
     const current = getOrInitUserItem(book);
     const paginaAtual =
       status === 'concluido'
@@ -582,6 +1546,7 @@ export default function App() {
       status: current.status === 'quero_ler' ? 'nenhum' : current.status,
     };
     await saveUserBookItem(updated);
+    removeBookFromProfileFavoritesIfPresent(book.id);
   };
 
   const handleSaveReadingProgress = (
@@ -589,6 +1554,7 @@ export default function App() {
     paginaAtual: number,
     totalPaginasOverride?: number
   ) => {
+    userActionTriggeredRef.current = true;
     const effectiveTotalPages = Math.max(
       1,
       totalPaginasOverride && totalPaginasOverride > 0
@@ -615,17 +1581,29 @@ export default function App() {
     });
 
     // Update real user reading metrics in profile
-    if (firebaseUser && userProfile) {
+    if (userProfile) {
+      const targetUid = firebaseUser?.uid || userProfile.uid;
       const nextTotalMinutes = (userProfile.totalMinutesRead || 0) + 1;
       const nextStreak = Math.max(1, userProfile.streakDays || 0);
-      const updatedProfile: UserProfile = {
+      const isNight = isNightHour(new Date());
+      const didAdvanceOrFinish =
+        paginaAtual !== current.paginaAtual ||
+        (isFinished && current.status !== 'concluido');
+      const nextNightReadings =
+        isNight && didAdvanceOrFinish
+          ? (userProfile.nightReadingsCount || 0) + 1
+          : userProfile.nightReadingsCount || 0;
+
+      const updatedProfile: UserProfile = stripUndefined({
         ...userProfile,
         totalMinutesRead: nextTotalMinutes,
         streakDays: nextStreak,
+        nightReadingsCount: nextNightReadings,
         updatedAt: new Date().toISOString(),
-      };
+      });
+      saveSessionProfile(updatedProfile);
       setUserProfile(updatedProfile);
-      setDoc(doc(db, 'users', firebaseUser.uid), updatedProfile, {
+      setDoc(doc(db, 'users', targetUid), updatedProfile, {
         merge: true,
       }).catch(() => {});
     }
@@ -694,6 +1672,1121 @@ export default function App() {
     }
   };
 
+  /**
+   * Atualiza exclusivamente o próprio perfil do usuário autenticado (/users/{uid}),
+   * garantindo unicidade de @username e preservando role, uid, email e estatísticas.
+   */
+  const handleUpdateOwnProfile = async (
+    input: ProfileUpdateInput
+  ): Promise<void> => {
+    if (!userProfile || !activeUserId) {
+      throw new Error('Faça login na sua conta para editar o perfil.');
+    }
+
+    // Garante que o usuário só pode alterar o próprio perfil
+    const targetUid = firebaseUser ? firebaseUser.uid : userProfile.uid;
+    if (targetUid !== userProfile.uid) {
+      throw new Error('Operação não permitida: você só pode editar o próprio perfil.');
+    }
+
+    const cleanDisplayName = input.displayName.trim();
+    if (!cleanDisplayName || cleanDisplayName.length > 60) {
+      throw new Error('Informe um nome válido (entre 1 e 60 caracteres).');
+    }
+
+    const usernameValidation = validateUsernameFormat(input.username);
+    if (!usernameValidation.valid) {
+      throw new Error(
+        usernameValidation.error || 'Nome de usuário (@username) inválido.'
+      );
+    }
+    const normalizedUsername = usernameValidation.normalized;
+    const previousUsername = (userProfile.username || '')
+      .replace(/^@+/, '')
+      .toLowerCase();
+
+    const cleanBio = input.bio.trim().slice(0, 160);
+    const cleanPhotoURL = input.photoURL || '';
+
+    // 1. Verificar unicidade de @username na memória (registeredUsers) e registro local
+    const conflictInMemory = registeredUsers.some(
+      (u) =>
+        u.uid !== targetUid &&
+        (u.username || '').replace(/^@+/, '').toLowerCase() ===
+          normalizedUsername
+    );
+    if (conflictInMemory) {
+      throw new Error(
+        `O nome de usuário @${normalizedUsername} já está sendo usado por outro leitor.`
+      );
+    }
+
+    const localRegistry = getLocalUsernamesRegistry();
+    if (
+      localRegistry[normalizedUsername] &&
+      localRegistry[normalizedUsername] !== targetUid
+    ) {
+      throw new Error(
+        `O nome de usuário @${normalizedUsername} já está sendo usado por outro leitor.`
+      );
+    }
+
+    // 2. Verificar unicidade de @username no Firestore (/usernames/{username})
+    const usernameRef = doc(db, 'usernames', normalizedUsername);
+    try {
+      const usernameSnap = await getDoc(usernameRef);
+      if (usernameSnap.exists()) {
+        const data = usernameSnap.data() as { uid?: string };
+        if (data?.uid && data.uid !== targetUid) {
+          throw new Error(
+            `O nome de usuário @${normalizedUsername} já está sendo usado por outro leitor.`
+          );
+        }
+      }
+    } catch (err: unknown) {
+      if (
+        err instanceof Error &&
+        err.message.includes('já está sendo usado')
+      ) {
+        throw err;
+      }
+      // Se houver falha de rede/offline, prossegue com verificação local
+    }
+
+    const nowIso = new Date().toISOString();
+
+    const validBookIdsSet = new Set(books.map((b) => b.id));
+    const rawFavIds = Array.isArray(input.favoriteBooks)
+      ? input.favoriteBooks
+      : Array.isArray(userProfile.favoriteBooks)
+      ? userProfile.favoriteBooks
+      : [];
+    const seenFavs = new Set<string>();
+    const cleanFavoriteBooks: string[] = [];
+    for (const id of rawFavIds) {
+      if (
+        typeof id === 'string' &&
+        id.trim() &&
+        validBookIdsSet.has(id) &&
+        !seenFavs.has(id)
+      ) {
+        seenFavs.add(id);
+        cleanFavoriteBooks.push(id);
+        if (cleanFavoriteBooks.length === 5) break;
+      }
+    }
+
+    // Preserva rigorosamente uid, email, role, streakDays, totalMinutesRead e preferenciasLeitor
+    const updatedProfile: UserProfile = stripUndefined({
+      ...userProfile,
+      uid: userProfile.uid,
+      email: userProfile.email,
+      role: userProfile.role,
+      streakDays: userProfile.streakDays || 0,
+      totalMinutesRead: userProfile.totalMinutesRead || 0,
+      nome: cleanDisplayName,
+      displayName: cleanDisplayName,
+      username: normalizedUsername,
+      bio: cleanBio,
+      foto: cleanPhotoURL,
+      photoURL: cleanPhotoURL,
+      favoriteBooks: cleanFavoriteBooks,
+      updatedAt: nowIso,
+    });
+
+    // 3. Persistir no Firestore (/usernames/{username} e /users/{uid})
+    if (firebaseUser) {
+      try {
+        await setDoc(usernameRef, {
+          uid: targetUid,
+          username: normalizedUsername,
+          updatedAt: nowIso,
+        });
+
+        if (previousUsername && previousUsername !== normalizedUsername) {
+          deleteDoc(doc(db, 'usernames', previousUsername)).catch(() => {});
+        }
+      } catch (err: unknown) {
+        // Se a regra do Firestore rejeitou a escrita em /usernames por já pertencer a outro uid
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('insufficient')) {
+          throw new Error(
+            `O nome de usuário @${normalizedUsername} já está reservado por outro leitor.`
+          );
+        }
+      }
+
+      try {
+        await setDoc(
+          doc(db, 'users', targetUid),
+          {
+            uid: updatedProfile.uid,
+            nome: updatedProfile.nome,
+            displayName: updatedProfile.displayName,
+            username: updatedProfile.username,
+            bio: updatedProfile.bio,
+            foto: updatedProfile.foto,
+            photoURL: updatedProfile.photoURL,
+            favoriteBooks: cleanFavoriteBooks,
+            updatedAt: updatedProfile.updatedAt,
+          },
+          { merge: true }
+        );
+      } catch (error) {
+        handleFirestoreError(error, OperationType.UPDATE, `users/${targetUid}`);
+        throw new Error(
+          'Não foi possível salvar as alterações no servidor. Tente novamente.'
+        );
+      }
+    } else {
+      // Sessão direta local/fallback: tenta sincronizar caso permitido
+      setDoc(doc(db, 'users', targetUid), updatedProfile, {
+        merge: true,
+      }).catch(() => {});
+    }
+
+    // 4. Atualizar estado local, perfil público da comunidade e sessão persistente
+    const updatedPubProfile: PublicProfile = stripUndefined({
+      uid: targetUid,
+      displayName: cleanDisplayName,
+      username: normalizedUsername,
+      bio: cleanBio,
+      photoURL: cleanPhotoURL,
+      premium: Boolean(userProfile.premium),
+      usernameColor: userProfile.usernameColor,
+      profileCustomization: userProfile.profileCustomization,
+      favoriteBooks: cleanFavoriteBooks,
+      profileFavoriteBooks: cleanFavoriteBooks,
+      updatedAt: nowIso,
+    });
+    setPublicProfilesMap((prev) => ({
+      ...prev,
+      [targetUid]: updatedPubProfile,
+    }));
+    if (firebaseUser) {
+      setDoc(
+        doc(db, 'public_profiles', targetUid),
+        stripUndefined(updatedPubProfile),
+        { merge: true }
+      ).catch(() => {});
+    }
+
+    saveLocalUsernameOwner(normalizedUsername, targetUid, previousUsername);
+    saveSessionProfile(updatedProfile);
+    setUserProfile(updatedProfile);
+    setRegisteredUsers((prev) =>
+      prev.map((u) => (u.uid === targetUid ? updatedProfile : u))
+    );
+  };
+
+  const handleSaveProfileCustomization = async (
+    customization: ProfileCustomization
+  ): Promise<void> => {
+    if (!userProfile) return;
+    const targetUid = firebaseUser?.uid || userProfile.uid;
+    const nowIso = new Date().toISOString();
+
+    const rawUsernameColor =
+      customization.usernameColor !== undefined
+        ? customization.usernameColor
+        : userProfile.usernameColor;
+    const cleanUsernameColor = isValidHexColor(rawUsernameColor)
+      ? rawUsernameColor!.trim()
+      : undefined;
+
+    const cleanCustomization: ProfileCustomization = stripUndefined({
+      background: customization.background,
+      banner: customization.banner,
+      effects: customization.effects || 'none',
+      theme: customization.theme || 'default',
+      usernameColor: cleanUsernameColor,
+      updatedAt: nowIso,
+    });
+
+    // Preserves strictly uid, email, role, nome, displayName, username, bio, foto, photoURL, streakDays, totalMinutesRead, preferenciasLeitor
+    const updatedProfile: UserProfile = stripUndefined({
+      ...userProfile,
+      uid: userProfile.uid,
+      usernameColor: cleanUsernameColor,
+      profileCustomization: cleanCustomization,
+      updatedAt: nowIso,
+    });
+
+    if (firebaseUser) {
+      try {
+        await setDoc(
+          doc(db, 'users', targetUid),
+          stripUndefined({
+            uid: targetUid,
+            usernameColor: cleanUsernameColor || '',
+            profileCustomization: cleanCustomization,
+            updatedAt: nowIso,
+          }),
+          { merge: true }
+        );
+        // Also persist under users/{uid}/profileCustomization/main as requested
+        setDoc(
+          doc(db, 'users', targetUid, 'profileCustomization', 'main'),
+          cleanCustomization,
+          { merge: true }
+        ).catch(() => {});
+      } catch (error) {
+        handleFirestoreError(
+          error,
+          OperationType.UPDATE,
+          `users/${targetUid}`
+        );
+        throw new Error(
+          'Não foi possível salvar a personalização no servidor. Tente novamente.'
+        );
+      }
+    } else {
+      setDoc(
+        doc(db, 'users', targetUid),
+        stripUndefined({
+          uid: targetUid,
+          usernameColor: cleanUsernameColor || '',
+          profileCustomization: cleanCustomization,
+          updatedAt: nowIso,
+        }),
+        { merge: true }
+      ).catch(() => {});
+    }
+
+    const displayName =
+      updatedProfile.displayName || updatedProfile.nome || 'Leitor LIVROFLIX';
+    const username = (
+      updatedProfile.username || generateDefaultUsername(updatedProfile)
+    )
+      .replace(/^@+/, '')
+      .toLowerCase();
+    const photoURL = updatedProfile.photoURL ?? updatedProfile.foto ?? '';
+    const bio = updatedProfile.bio || '';
+
+    const updatedPubProfile: PublicProfile = stripUndefined({
+      uid: targetUid,
+      displayName,
+      username,
+      bio,
+      photoURL,
+      premium: Boolean(updatedProfile.premium),
+      usernameColor: cleanUsernameColor,
+      profileCustomization: cleanCustomization,
+      favoriteBooks: updatedProfile.favoriteBooks,
+      profileFavoriteBooks:
+        updatedProfile.profileFavoriteBooks ?? updatedProfile.favoriteBooks,
+      updatedAt: nowIso,
+    });
+
+    setPublicProfilesMap((prev) => ({
+      ...prev,
+      [targetUid]: updatedPubProfile,
+    }));
+
+    if (firebaseUser) {
+      setDoc(
+        doc(db, 'public_profiles', targetUid),
+        stripUndefined(updatedPubProfile),
+        { merge: true }
+      ).catch(() => {});
+    }
+
+    saveSessionProfile(updatedProfile);
+    setUserProfile(updatedProfile);
+    setRegisteredUsers((prev) =>
+      prev.map((u) => (u.uid === targetUid ? updatedProfile : u))
+    );
+  };
+
+  const handleTogglePremiumSubscription = async (
+    activate: boolean
+  ): Promise<void> => {
+    if (!userProfile) return;
+    const targetUid = firebaseUser?.uid || userProfile.uid;
+    const nowIso = new Date().toISOString();
+
+    // Preserva todas as personalizações, cor do nome e até 5 livros favoritos salvos no banco,
+    // mesmo quando a assinatura é encerrada (activate === false).
+    const updatedProfile: UserProfile = stripUndefined({
+      ...userProfile,
+      uid: userProfile.uid,
+      premium: activate,
+      premiumPlan: 'mensal_11',
+      premiumStatus: activate ? 'active' : 'canceled',
+      premiumUpdatedAt: nowIso,
+      updatedAt: nowIso,
+    });
+
+    saveSessionProfile(updatedProfile);
+    setUserProfile(updatedProfile);
+    setRegisteredUsers((prev) =>
+      prev.map((u) => (u.uid === targetUid ? updatedProfile : u))
+    );
+
+    const displayName =
+      updatedProfile.displayName || updatedProfile.nome || 'Leitor LIVROFLIX';
+    const username = (
+      updatedProfile.username || generateDefaultUsername(updatedProfile)
+    )
+      .replace(/^@+/, '')
+      .toLowerCase();
+    const photoURL = updatedProfile.photoURL ?? updatedProfile.foto ?? '';
+    const bio = updatedProfile.bio || '';
+
+    const updatedPubProfile: PublicProfile = stripUndefined({
+      uid: targetUid,
+      displayName,
+      username,
+      bio,
+      photoURL,
+      premium: activate,
+      usernameColor: updatedProfile.usernameColor,
+      profileCustomization: updatedProfile.profileCustomization,
+      favoriteBooks: updatedProfile.favoriteBooks,
+      profileFavoriteBooks:
+        updatedProfile.profileFavoriteBooks ?? updatedProfile.favoriteBooks,
+      unlockedBadges: updatedProfile.unlockedBadges,
+      profileBadges: updatedProfile.profileBadges,
+      updatedAt: nowIso,
+    });
+
+    setPublicProfilesMap((prev) => ({
+      ...prev,
+      [targetUid]: updatedPubProfile,
+    }));
+
+    if (firebaseUser) {
+      try {
+        await setDoc(
+          doc(db, 'users', targetUid),
+          {
+            uid: targetUid,
+            premium: activate,
+            premiumPlan: 'mensal_11',
+            premiumStatus: activate ? 'active' : 'canceled',
+            premiumUpdatedAt: nowIso,
+            updatedAt: nowIso,
+          },
+          { merge: true }
+        );
+        setDoc(
+          doc(db, 'public_profiles', targetUid),
+          stripUndefined(updatedPubProfile),
+          { merge: true }
+        ).catch(() => {});
+      } catch (error) {
+        handleFirestoreError(
+          error,
+          OperationType.UPDATE,
+          `users/${targetUid}`
+        );
+        throw new Error(
+          'Não foi possível atualizar sua assinatura Premium agora. Tente novamente.'
+        );
+      }
+    } else {
+      setDoc(
+        doc(db, 'users', targetUid),
+        {
+          uid: targetUid,
+          premium: activate,
+          premiumPlan: 'mensal_11',
+          premiumStatus: activate ? 'active' : 'canceled',
+          premiumUpdatedAt: nowIso,
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      ).catch(() => {});
+    }
+  };
+
+  // ===============================================================
+  // Community Handlers (Posts, Likes, Replies, Follows, Notifications, Moderation)
+  // ===============================================================
+  const resolveUidByUsername = async (
+    usernameInput: string
+  ): Promise<string | null> => {
+    const normalized = usernameInput.replace(/^@+/, '').toLowerCase().trim();
+    if (!normalized) return null;
+
+    // 1. Check publicProfilesMap
+    const foundPublic = Object.values(publicProfilesMap).find(
+      (p) => (p.username || '').replace(/^@+/, '').toLowerCase() === normalized
+    );
+    if (foundPublic?.uid) return foundPublic.uid;
+
+    // 2. Check registeredUsers in memory
+    const foundReg = registeredUsers.find(
+      (u) => (u.username || '').replace(/^@+/, '').toLowerCase() === normalized
+    );
+    if (foundReg?.uid) return foundReg.uid;
+
+    // 3. Check local usernames registry
+    const localMap = getLocalUsernamesRegistry();
+    if (localMap[normalized]) return localMap[normalized];
+
+    // 4. Query /usernames/{normalized} in Firestore
+    try {
+      const snap = await getDoc(doc(db, 'usernames', normalized));
+      if (snap.exists()) {
+        const data = snap.data() as { uid?: string };
+        if (data?.uid) return data.uid;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  };
+
+  const handleRefreshCommunityFeed = async (): Promise<void> => {
+    try {
+      const snap = await getDocs(collection(db, 'community_posts'));
+      const remoteList: CommunityPost[] = [];
+      const remoteIds = new Set<string>();
+      snap.forEach((d) => {
+        const data = d.data() as CommunityPost;
+        const id = data.id || d.id;
+        if (id && !remoteIds.has(id)) {
+          remoteIds.add(id);
+          remoteList.push({ ...data, id });
+        }
+      });
+      setCommunityPosts((prev) => {
+        const mergedMap = new Map<string, CommunityPost>();
+        remoteList.forEach((p) => mergedMap.set(p.id, p));
+        if (!firebaseUser) {
+          prev.forEach((p) => {
+            if (!mergedMap.has(p.id)) mergedMap.set(p.id, p);
+          });
+        }
+        return Array.from(mergedMap.values()).sort((a, b) =>
+          (b.createdAt || '').localeCompare(a.createdAt || '')
+        );
+      });
+    } catch {
+      // Offline or snapshot already active
+    }
+  };
+
+  const handleCreateCommunityPost = async (
+    input: CreatePostInput
+  ): Promise<void> => {
+    if (!userProfile || !activeUserId) {
+      throw new Error('Faça login na sua conta para publicar na Comunidade.');
+    }
+
+    const cleanText = input.text.trim();
+    if (cleanText.length > POST_MAX_LENGTH) {
+      throw new Error(
+        `A publicação não pode ultrapassar ${POST_MAX_LENGTH} caracteres.`
+      );
+    }
+
+    const hasImage = Boolean(input.imageUrl && input.imageUrl.trim());
+    const hasBook = Boolean(input.bookId && input.bookId.trim());
+    if (cleanText.length === 0 && !hasImage && !hasBook) {
+      throw new Error(
+        'Escreva um texto, adicione uma imagem ou vincule um livro para publicar.'
+      );
+    }
+
+    const nowIso = new Date().toISOString();
+    const postId = `post_${Date.now()}_${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const authorName =
+      userProfile.displayName || userProfile.nome || 'Leitor LIVROFLIX';
+    const authorUsername = (
+      userProfile.username || generateDefaultUsername(userProfile)
+    )
+      .replace(/^@+/, '')
+      .toLowerCase();
+    const authorPhotoURL = userProfile.photoURL ?? userProfile.foto ?? '';
+    const mentions = extractMentionsFromText(cleanText);
+
+    const newPost: CommunityPost = stripUndefined({
+      id: postId,
+      authorId: activeUserId,
+      authorName,
+      authorUsername,
+      authorPhotoURL,
+      text: cleanText,
+      imageUrl: hasImage ? input.imageUrl : undefined,
+      bookId: hasBook ? input.bookId : undefined,
+      mentions,
+      createdAt: nowIso,
+    });
+
+    setCommunityPosts((prev) => [
+      newPost,
+      ...prev.filter((p) => p.id !== postId),
+    ]);
+
+    if (firebaseUser) {
+      try {
+        await setDoc(doc(db, 'community_posts', postId), newPost);
+      } catch (error) {
+        handleFirestoreError(
+          error,
+          OperationType.CREATE,
+          `community_posts/${postId}`
+        );
+        throw new Error('Não foi possível salvar sua publicação. Tente novamente.');
+      }
+
+      // Send notifications for @username mentions
+      for (const mentionedUsername of mentions) {
+        const targetUid = await resolveUidByUsername(mentionedUsername);
+        if (targetUid && targetUid !== activeUserId) {
+          const notifId = `notif_mention_${postId}_${targetUid}`;
+          const notif: CommunityNotification = stripUndefined({
+            id: notifId,
+            recipientId: targetUid,
+            actorId: activeUserId,
+            actorName: authorName,
+            actorUsername: authorUsername,
+            actorPhotoURL: authorPhotoURL,
+            type: 'mention',
+            postId,
+            postSnippet: cleanText.slice(0, 120),
+            read: false,
+            createdAt: nowIso,
+          });
+          setDoc(doc(db, 'community_notifications', notifId), notif).catch(
+            () => {}
+          );
+        }
+      }
+    }
+  };
+
+  const handleDeleteCommunityPost = async (postId: string): Promise<void> => {
+    if (!activeUserId) return;
+    const targetPost = communityPosts.find((p) => p.id === postId);
+    if (!targetPost) return;
+    if (targetPost.authorId !== activeUserId && !isAdmin) {
+      throw new Error('Você só pode excluir suas próprias publicações.');
+    }
+
+    setCommunityPosts((prev) => prev.filter((p) => p.id !== postId));
+    if (firebaseUser) {
+      try {
+        await deleteDoc(doc(db, 'community_posts', postId));
+      } catch (error) {
+        handleFirestoreError(
+          error,
+          OperationType.DELETE,
+          `community_posts/${postId}`
+        );
+      }
+    }
+  };
+
+  const handleToggleCommunityLike = async (
+    post: CommunityPost
+  ): Promise<void> => {
+    if (!userProfile || !activeUserId) return;
+
+    const likeId = `${post.id}_${activeUserId}`;
+    const existingLike = communityLikes.find(
+      (l) =>
+        l.id === likeId || (l.postId === post.id && l.userId === activeUserId)
+    );
+
+    if (existingLike) {
+      const targetId = existingLike.id || likeId;
+      setCommunityLikes((prev) => prev.filter((l) => l.id !== targetId));
+      if (firebaseUser) {
+        try {
+          await deleteDoc(doc(db, 'community_likes', targetId));
+        } catch (error) {
+          handleFirestoreError(
+            error,
+            OperationType.DELETE,
+            `community_likes/${targetId}`
+          );
+        }
+      }
+    } else {
+      const nowIso = new Date().toISOString();
+      const newLike: CommunityLike = {
+        id: likeId,
+        postId: post.id,
+        postAuthorId: post.authorId,
+        userId: activeUserId,
+        createdAt: nowIso,
+      };
+      setCommunityLikes((prev) => [
+        ...prev.filter((l) => l.id !== likeId),
+        newLike,
+      ]);
+
+      if (firebaseUser) {
+        try {
+          await setDoc(doc(db, 'community_likes', likeId), newLike);
+        } catch (error) {
+          handleFirestoreError(
+            error,
+            OperationType.CREATE,
+            `community_likes/${likeId}`
+          );
+        }
+
+        if (post.authorId !== activeUserId) {
+          const authorName =
+            userProfile.displayName || userProfile.nome || 'Leitor LIVROFLIX';
+          const authorUsername = (
+            userProfile.username || generateDefaultUsername(userProfile)
+          )
+            .replace(/^@+/, '')
+            .toLowerCase();
+          const authorPhotoURL = userProfile.photoURL ?? userProfile.foto ?? '';
+          const notifId = `notif_like_${post.id}_${activeUserId}`;
+          const notif: CommunityNotification = stripUndefined({
+            id: notifId,
+            recipientId: post.authorId,
+            actorId: activeUserId,
+            actorName: authorName,
+            actorUsername: authorUsername,
+            actorPhotoURL: authorPhotoURL,
+            type: 'like',
+            postId: post.id,
+            postSnippet: (post.text || '').slice(0, 120),
+            read: false,
+            createdAt: nowIso,
+          });
+          setDoc(doc(db, 'community_notifications', notifId), notif).catch(
+            () => {}
+          );
+        }
+      }
+    }
+  };
+
+  const handleCreateCommunityReply = async (
+    input: CreateReplyInput
+  ): Promise<void> => {
+    if (!userProfile || !activeUserId) {
+      throw new Error('Faça login na sua conta para responder.');
+    }
+
+    const cleanText = input.text.trim();
+    if (!cleanText) {
+      throw new Error('Escreva uma resposta antes de enviar.');
+    }
+    if (cleanText.length > REPLY_MAX_LENGTH) {
+      throw new Error(
+        `A resposta não pode ultrapassar ${REPLY_MAX_LENGTH} caracteres.`
+      );
+    }
+
+    const nowIso = new Date().toISOString();
+    const replyId = `reply_${Date.now()}_${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const authorName =
+      userProfile.displayName || userProfile.nome || 'Leitor LIVROFLIX';
+    const authorUsername = (
+      userProfile.username || generateDefaultUsername(userProfile)
+    )
+      .replace(/^@+/, '')
+      .toLowerCase();
+    const authorPhotoURL = userProfile.photoURL ?? userProfile.foto ?? '';
+    const mentions = extractMentionsFromText(cleanText);
+
+    const newReply: CommunityReply = stripUndefined({
+      id: replyId,
+      postId: input.postId,
+      postAuthorId: input.postAuthorId,
+      authorId: activeUserId,
+      authorName,
+      authorUsername,
+      authorPhotoURL,
+      text: cleanText,
+      parentReplyId: input.parentReplyId || undefined,
+      replyToUsername: input.replyToUsername || undefined,
+      mentions,
+      createdAt: nowIso,
+    });
+
+    setCommunityReplies((prev) => [
+      ...prev.filter((r) => r.id !== replyId),
+      newReply,
+    ]);
+
+    if (firebaseUser) {
+      try {
+        await setDoc(doc(db, 'community_replies', replyId), newReply);
+      } catch (error) {
+        handleFirestoreError(
+          error,
+          OperationType.CREATE,
+          `community_replies/${replyId}`
+        );
+        throw new Error('Não foi possível enviar sua resposta.');
+      }
+
+      const notifiedRecipients = new Set<string>();
+
+      // 1. Notify post author about the reply
+      if (input.postAuthorId && input.postAuthorId !== activeUserId) {
+        notifiedRecipients.add(input.postAuthorId);
+        const notifId = `notif_reply_${replyId}_${input.postAuthorId}`;
+        const notif: CommunityNotification = stripUndefined({
+          id: notifId,
+          recipientId: input.postAuthorId,
+          actorId: activeUserId,
+          actorName: authorName,
+          actorUsername: authorUsername,
+          actorPhotoURL: authorPhotoURL,
+          type: 'reply',
+          postId: input.postId,
+          replyId,
+          postSnippet: cleanText.slice(0, 120),
+          read: false,
+          createdAt: nowIso,
+        });
+        setDoc(doc(db, 'community_notifications', notifId), notif).catch(
+          () => {}
+        );
+      }
+
+      // 2. Notify mentioned users (@username) in the reply
+      for (const mentionedUsername of mentions) {
+        const targetUid = await resolveUidByUsername(mentionedUsername);
+        if (
+          targetUid &&
+          targetUid !== activeUserId &&
+          !notifiedRecipients.has(targetUid)
+        ) {
+          notifiedRecipients.add(targetUid);
+          const notifId = `notif_mention_reply_${replyId}_${targetUid}`;
+          const notif: CommunityNotification = stripUndefined({
+            id: notifId,
+            recipientId: targetUid,
+            actorId: activeUserId,
+            actorName: authorName,
+            actorUsername: authorUsername,
+            actorPhotoURL: authorPhotoURL,
+            type: 'mention',
+            postId: input.postId,
+            replyId,
+            postSnippet: cleanText.slice(0, 120),
+            read: false,
+            createdAt: nowIso,
+          });
+          setDoc(doc(db, 'community_notifications', notifId), notif).catch(
+            () => {}
+          );
+        }
+      }
+    }
+  };
+
+  const handleDeleteCommunityReply = async (replyId: string): Promise<void> => {
+    if (!activeUserId) return;
+    const targetReply = communityReplies.find((r) => r.id === replyId);
+    if (!targetReply) return;
+    if (targetReply.authorId !== activeUserId && !isAdmin) {
+      throw new Error('Você só pode excluir suas próprias respostas.');
+    }
+
+    setCommunityReplies((prev) => prev.filter((r) => r.id !== replyId));
+    if (firebaseUser) {
+      try {
+        await deleteDoc(doc(db, 'community_replies', replyId));
+      } catch (error) {
+        handleFirestoreError(
+          error,
+          OperationType.DELETE,
+          `community_replies/${replyId}`
+        );
+      }
+    }
+  };
+
+  const handleToggleCommunityFollow = async (
+    targetUserId: string
+  ): Promise<void> => {
+    if (!userProfile || !activeUserId) return;
+    if (targetUserId === activeUserId) {
+      throw new Error('Você não pode seguir a si mesmo.');
+    }
+
+    const followId = `${activeUserId}_${targetUserId}`;
+    const existingFollow = communityFollows.find(
+      (f) =>
+        f.id === followId ||
+        (f.followerId === activeUserId && f.followingId === targetUserId)
+    );
+
+    if (existingFollow) {
+      const targetDocId = existingFollow.id || followId;
+      setCommunityFollows((prev) => prev.filter((f) => f.id !== targetDocId));
+      if (firebaseUser) {
+        try {
+          await deleteDoc(doc(db, 'community_follows', targetDocId));
+        } catch (error) {
+          handleFirestoreError(
+            error,
+            OperationType.DELETE,
+            `community_follows/${targetDocId}`
+          );
+        }
+      }
+    } else {
+      const nowIso = new Date().toISOString();
+      const newFollow: CommunityFollow = {
+        id: followId,
+        followerId: activeUserId,
+        followingId: targetUserId,
+        createdAt: nowIso,
+      };
+      setCommunityFollows((prev) => [
+        ...prev.filter((f) => f.id !== followId),
+        newFollow,
+      ]);
+
+      if (firebaseUser) {
+        try {
+          await setDoc(doc(db, 'community_follows', followId), newFollow);
+        } catch (error) {
+          handleFirestoreError(
+            error,
+            OperationType.CREATE,
+            `community_follows/${followId}`
+          );
+        }
+
+        const authorName =
+          userProfile.displayName || userProfile.nome || 'Leitor LIVROFLIX';
+        const authorUsername = (
+          userProfile.username || generateDefaultUsername(userProfile)
+        )
+          .replace(/^@+/, '')
+          .toLowerCase();
+        const authorPhotoURL = userProfile.photoURL ?? userProfile.foto ?? '';
+        const notifId = `notif_follow_${activeUserId}_${targetUserId}`;
+        const notif: CommunityNotification = stripUndefined({
+          id: notifId,
+          recipientId: targetUserId,
+          actorId: activeUserId,
+          actorName: authorName,
+          actorUsername: authorUsername,
+          actorPhotoURL: authorPhotoURL,
+          type: 'follow',
+          read: false,
+          createdAt: nowIso,
+        });
+        setDoc(doc(db, 'community_notifications', notifId), notif).catch(
+          () => {}
+        );
+      }
+    }
+  };
+
+  const handleMarkCommunityNotificationsRead = async (): Promise<void> => {
+    if (!activeUserId) return;
+    const unread = communityNotifications.filter(
+      (n) => n.recipientId === activeUserId && !n.read
+    );
+    if (unread.length === 0) return;
+
+    setCommunityNotifications((prev) =>
+      prev.map((n) =>
+        n.recipientId === activeUserId ? { ...n, read: true } : n
+      )
+    );
+
+    if (firebaseUser) {
+      for (const notif of unread) {
+        setDoc(
+          doc(db, 'community_notifications', notif.id),
+          { read: true },
+          { merge: true }
+        ).catch(() => {});
+      }
+    }
+  };
+
+  const handleSubmitCommunityReport = async (
+    input: CreateReportInput
+  ): Promise<void> => {
+    if (!userProfile || !activeUserId) {
+      throw new Error('Faça login para enviar uma denúncia.');
+    }
+    const cleanReason = input.reason.trim();
+    if (!cleanReason) {
+      throw new Error('Selecione um motivo para a denúncia.');
+    }
+
+    const nowIso = new Date().toISOString();
+    const reportId = `report_${Date.now()}_${Math.random()
+      .toString(36)
+      .slice(2, 7)}`;
+    const newReport: CommunityReport = stripUndefined({
+      id: reportId,
+      reporterId: activeUserId,
+      reporterName:
+        userProfile.displayName || userProfile.nome || 'Leitor LIVROFLIX',
+      reporterUsername: (userProfile.username || 'leitor')
+        .replace(/^@+/, '')
+        .toLowerCase(),
+      targetType: input.targetType,
+      targetPostId: input.targetPostId || undefined,
+      targetReviewId: input.targetReviewId || undefined,
+      targetBookId: input.targetBookId || undefined,
+      targetUserId: input.targetUserId,
+      targetUsername: input.targetUsername || undefined,
+      reason: cleanReason.slice(0, 120),
+      details: input.details ? input.details.trim().slice(0, 500) : undefined,
+      status: 'pending',
+      createdAt: nowIso,
+    });
+
+    if (isAdmin) {
+      setCommunityReports((prev) => [newReport, ...prev]);
+    }
+
+    if (firebaseUser) {
+      await setDoc(doc(db, 'community_reports', reportId), newReport);
+    }
+  };
+
+  const handleResolveCommunityReport = async (
+    reportId: string,
+    status: 'reviewed' | 'dismissed'
+  ): Promise<void> => {
+    if (!isAdmin) return;
+    setCommunityReports((prev) =>
+      prev.map((r) => (r.id === reportId ? { ...r, status } : r))
+    );
+    if (firebaseUser) {
+      await setDoc(
+        doc(db, 'community_reports', reportId),
+        { status },
+        { merge: true }
+      );
+    }
+  };
+
+  const unreadCommunityCount = useMemo(
+    () =>
+      communityNotifications.filter(
+        (n) => n.recipientId === activeUserId && !n.read
+      ).length,
+    [communityNotifications, activeUserId]
+  );
+
+  const handleSaveBookReview = async (input: {
+    bookId: string;
+    text: string;
+    rating?: number;
+  }): Promise<void> => {
+    if (!userProfile || !activeUserId) {
+      throw new Error('Faça login na sua conta para escrever uma review.');
+    }
+
+    const cleanText = input.text.trim();
+    if (cleanText.length < 1) {
+      throw new Error('Escreva sua resenha antes de publicar.');
+    }
+    if (cleanText.length > 500) {
+      throw new Error('A resenha pode ter no máximo 500 caracteres.');
+    }
+
+    const nowIso = new Date().toISOString();
+    const existingReview = bookReviews.find(
+      (r) => r.bookId === input.bookId && r.userId === activeUserId
+    );
+    const reviewId =
+      existingReview?.id || `review_${input.bookId}_${activeUserId}`;
+
+    const authorName = (
+      userProfile.displayName ||
+      userProfile.nome ||
+      'Leitor LIVROFLIX'
+    ).slice(0, 80);
+    const authorUsername = (
+      userProfile.username || generateDefaultUsername(userProfile)
+    )
+      .replace(/^@+/, '')
+      .toLowerCase()
+      .slice(0, 30);
+    const authorPhoto = userProfile.photoURL ?? userProfile.foto ?? '';
+
+    const reviewDoc: BookReview = stripUndefined({
+      id: reviewId,
+      bookId: input.bookId,
+      userId: activeUserId,
+      authorName,
+      authorUsername,
+      authorPhoto: authorPhoto || undefined,
+      text: cleanText,
+      rating:
+        typeof input.rating === 'number' &&
+        input.rating >= 0.5 &&
+        input.rating <= 5
+          ? input.rating
+          : undefined,
+      createdAt: existingReview?.createdAt || nowIso,
+      updatedAt: existingReview ? nowIso : undefined,
+    });
+
+    setBookReviews((prev) => {
+      const filtered = prev.filter(
+        (r) =>
+          r.id !== reviewId &&
+          !(r.bookId === input.bookId && r.userId === activeUserId)
+      );
+      return [reviewDoc, ...filtered].sort((a, b) =>
+        (b.createdAt || '').localeCompare(a.createdAt || '')
+      );
+    });
+
+    if (firebaseUser) {
+      try {
+        await setDoc(doc(db, 'book_reviews', reviewId), reviewDoc);
+      } catch (error) {
+        handleFirestoreError(
+          error,
+          existingReview ? OperationType.UPDATE : OperationType.CREATE,
+          `book_reviews/${reviewId}`
+        );
+        throw new Error(
+          'Não foi possível publicar sua review agora. Tente novamente.'
+        );
+      }
+    } else {
+      setDoc(doc(db, 'book_reviews', reviewId), reviewDoc).catch(() => {});
+    }
+  };
+
+  const handleDeleteBookReview = async (reviewId: string): Promise<void> => {
+    if (!userProfile || !activeUserId) return;
+    const targetReview = bookReviews.find((r) => r.id === reviewId);
+    if (!targetReview) return;
+    if (targetReview.userId !== activeUserId && !isAdmin) {
+      throw new Error('Você só pode excluir a sua própria review.');
+    }
+
+    setBookReviews((prev) => prev.filter((r) => r.id !== reviewId));
+
+    if (firebaseUser) {
+      try {
+        await deleteDoc(doc(db, 'book_reviews', reviewId));
+      } catch (error) {
+        handleFirestoreError(
+          error,
+          OperationType.DELETE,
+          `book_reviews/${reviewId}`
+        );
+      }
+    } else {
+      deleteDoc(doc(db, 'book_reviews', reviewId)).catch(() => {});
+    }
+  };
+
   // Navigation Handlers
   const openBookDetail = (book: Book) => {
     if (
@@ -703,9 +2796,23 @@ export default function App() {
     ) {
       setPreviousView(activeView);
     }
+    setScrollToReviewsOnDetail(false);
     setSelectedBookId(book.id);
     setActiveView('livro-detalhe');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const openBookDetailWithReviews = (book: Book) => {
+    if (
+      activeView !== 'livro-detalhe' &&
+      activeView !== 'leitor' &&
+      activeView !== 'leitor-pdf'
+    ) {
+      setPreviousView(activeView);
+    }
+    setScrollToReviewsOnDetail(true);
+    setSelectedBookId(book.id);
+    setActiveView('livro-detalhe');
   };
 
   /**
@@ -777,7 +2884,13 @@ export default function App() {
 
   // Admin Handlers — Exclusively allowed for Admin, persisted to Firestore for all users & visitors
   const handleAdminSaveBook = async (bookToSave: Book) => {
-    const cleanedBook = stripUndefined(bookToSave);
+    const cleanedBook = stripUndefined({
+      ...bookToSave,
+      createdAt:
+        bookToSave.createdAt ||
+        resolveBookCreatedAtIso(bookToSave) ||
+        new Date().toISOString(),
+    });
     setBooks((prev) => {
       const exists = prev.some((b) => b.id === cleanedBook.id);
       const next = exists
@@ -1286,6 +3399,27 @@ export default function App() {
     );
   }
 
+  if (isCatalogLoading) {
+    return (
+      <div
+        className="min-h-screen bg-[#040D1A] flex flex-col items-center justify-center gap-6 px-4 select-none"
+        style={{
+          backgroundColor: platformSettings.backgroundColor || '#040D1A',
+        }}
+      >
+        <LivroflixLogo
+          size="lg"
+          logoImageUrl={platformSettings.logoImageUrl}
+          logoText={platformSettings.logoText}
+        />
+        <div
+          className="h-9 w-9 rounded-full border-3 border-blue-400/25 border-t-[#60A5FA] animate-spin"
+          aria-label="Carregando"
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       className="min-h-screen bg-[#040D1A] text-white flex flex-col justify-between"
@@ -1303,39 +3437,57 @@ export default function App() {
         isAdmin={isAdmin}
         downloadsCount={downloadsCount}
         myListCount={myListCount}
+        unreadCommunityCount={unreadCommunityCount}
         categoriesList={effectiveCategoriesList}
         platformSettings={platformSettings}
+        onOpenPremiumModal={() => setVipModalOpen(true)}
       />
 
       {/* Main Content View Router */}
       <main className="flex-1">
+        {/* VIEW: COMUNIDADE LITERÁRIA */}
+        {activeView === 'comunidade' && (
+          <CommunityView
+            books={activeBooks}
+            posts={communityPosts}
+            likes={communityLikes}
+            replies={communityReplies}
+            follows={communityFollows}
+            notifications={communityNotifications}
+            reports={communityReports}
+            publicProfilesMap={publicProfilesMap}
+            currentUserProfile={userProfile}
+            isAuthenticated={Boolean(firebaseUser || userProfile)}
+            isAdmin={isAdmin}
+            onSelectBook={openBookDetail}
+            onCreatePost={handleCreateCommunityPost}
+            onDeletePost={handleDeleteCommunityPost}
+            onToggleLike={handleToggleCommunityLike}
+            onCreateReply={handleCreateCommunityReply}
+            onDeleteReply={handleDeleteCommunityReply}
+            onToggleFollow={handleToggleCommunityFollow}
+            onMarkNotificationsRead={handleMarkCommunityNotificationsRead}
+            onSubmitReport={handleSubmitCommunityReport}
+            onResolveReport={handleResolveCommunityReport}
+            onNavigateProfile={() => handleNavigate('perfil')}
+            onRefreshFeed={handleRefreshCommunityFeed}
+          />
+        )}
+
         {/* VIEW: HOME INICIAL */}
         {activeView === 'home' && (
           <div className="pb-20">
             {activeBooks.length === 0 ? (
-              <div className="pt-36 pb-24 px-4 sm:px-8 mx-auto max-w-2xl text-center">
-                <div className="rounded-2xl bg-[#071426] border border-blue-400/20 p-10 sm:p-12 shadow-2xl space-y-4">
-                  <BookOpen className="w-12 h-12 text-[#60A5FA] mx-auto opacity-85" />
-                  <h1 className="font-display text-2xl sm:text-4xl font-bold text-white">
-                    Catálogo pronto para livros reais
-                  </h1>
-                  <p className="text-sm sm:text-base text-blue-200/75 leading-relaxed">
-                    Todos os livros automáticos e dados superficiais foram removidos.
-                    Adicione os livros reais da plataforma pelo painel administrativo para exibi-los aqui.
-                  </p>
-                  {isAdmin && (
-                    <div className="pt-2">
-                      <button
-                        type="button"
-                        onClick={() => handleNavigate('admin')}
-                        className="inline-flex items-center gap-2 rounded-xl bg-[#2563EB] hover:bg-[#3B82F6] px-6 py-3.5 text-sm font-bold text-white shadow-lg transition-all cursor-pointer"
-                      >
-                        <ShieldCheck className="w-4 h-4" />
-                        <span>Abrir Painel Admin e Cadastrar Livros</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
+              <div className="min-h-[75vh] flex flex-col items-center justify-center gap-6 px-4 select-none">
+                <LivroflixLogo
+                  size="lg"
+                  logoImageUrl={platformSettings.logoImageUrl}
+                  logoText={platformSettings.logoText}
+                />
+                <div
+                  className="h-9 w-9 rounded-full border-3 border-blue-400/25 border-t-[#60A5FA] animate-spin"
+                  aria-label="Carregando"
+                />
               </div>
             ) : (
               <>
@@ -1419,28 +3571,10 @@ export default function App() {
         {activeView === 'categorias' && (
           <div className="min-h-screen bg-[#040D1A] pt-28 lg:pt-24 pb-24">
             <div className="mx-auto max-w-[1440px] px-4 sm:px-8">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8 pb-6 border-b border-blue-400/15">
+              <div className="mb-8 pb-6 border-b border-blue-400/15">
                 <h1 className="font-display text-3xl sm:text-5xl font-extrabold text-white">
                   {selectedCategory}
                 </h1>
-
-                {/* Quick Switcher for other categories */}
-                <div className="flex flex-wrap items-center gap-2">
-                  {effectiveCategoriesList.map((cat) => (
-                    <button
-                      key={cat}
-                      type="button"
-                      onClick={() => setSelectedCategory(cat)}
-                      className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer ${
-                        selectedCategory === cat
-                          ? 'bg-[#2563EB] text-white font-bold shadow-md'
-                          : 'bg-[#071426] text-blue-200/80 hover:text-white border border-blue-400/20'
-                      }`}
-                    >
-                      {cat}
-                    </button>
-                  ))}
-                </div>
               </div>
 
               {selectedCategoryBooks.length === 0 ? (
@@ -1477,6 +3611,20 @@ export default function App() {
             onReadBook={openBookReader}
             onToggleList={handleToggleList}
             platformSettings={platformSettings}
+            publicProfilesMap={publicProfilesMap}
+            communityPosts={communityPosts}
+            communityLikes={communityLikes}
+            communityReplies={communityReplies}
+            communityFollows={communityFollows}
+            currentUserProfile={userProfile}
+            isAuthenticated={Boolean(firebaseUser || userProfile)}
+            isAdmin={isAdmin}
+            onToggleFollow={handleToggleCommunityFollow}
+            onToggleLike={handleToggleCommunityLike}
+            onCreateReply={handleCreateCommunityReply}
+            onDeletePost={handleDeleteCommunityPost}
+            onDeleteReply={handleDeleteCommunityReply}
+            onRequireAuth={() => handleNavigate('perfil')}
           />
         )}
 
@@ -1485,11 +3633,21 @@ export default function App() {
           <MyLibraryView
             books={books}
             userLibrary={userLibrary}
+            userProfile={userProfile}
+            bookReviews={bookReviews}
             initialTab="lista"
             onSelectBook={openBookDetail}
+            onOpenBookReview={openBookDetailWithReviews}
             onReadBook={openBookReader}
             onChangeStatus={handleChangeStatus}
             onRemoveFromList={handleRemoveFromList}
+            profileFavoriteBookIds={
+              userProfile?.profileFavoriteBooks ??
+              userProfile?.favoriteBooks ??
+              []
+            }
+            onToggleProfileFavoriteBook={handleToggleProfileFavoriteBook}
+            onOpenPremiumModal={() => setVipModalOpen(true)}
             platformSettings={platformSettings}
           />
         )}
@@ -1499,9 +3657,11 @@ export default function App() {
           <DownloadsView
             books={books}
             userLibrary={userLibrary}
+            userProfile={userProfile}
             onSelectBook={openBookDetail}
             onReadBook={openBookReader}
             onToggleDownload={handleToggleDownload}
+            onOpenPremiumModal={() => setVipModalOpen(true)}
             platformSettings={platformSettings}
           />
         )}
@@ -1511,11 +3671,15 @@ export default function App() {
           <MyLibraryView
             books={books}
             userLibrary={userLibrary}
+            userProfile={userProfile}
+            bookReviews={bookReviews}
             initialTab="lendo"
             onSelectBook={openBookDetail}
+            onOpenBookReview={openBookDetailWithReviews}
             onReadBook={openBookReader}
             onChangeStatus={handleChangeStatus}
             onRemoveFromList={handleRemoveFromList}
+            onOpenPremiumModal={() => setVipModalOpen(true)}
             platformSettings={platformSettings}
           />
         )}
@@ -1528,6 +3692,11 @@ export default function App() {
             isAdmin={isAdmin}
             books={books}
             userLibrary={userLibrary}
+            communityPosts={communityPosts}
+            communityLikes={communityLikes}
+            communityReplies={communityReplies}
+            communityFollows={communityFollows}
+            publicProfilesMap={publicProfilesMap}
             onSignIn={async () => {
               await signInWithGoogle();
             }}
@@ -1538,6 +3707,16 @@ export default function App() {
             }}
             onSelectBook={openBookDetail}
             onOpenAdmin={() => handleNavigate('admin')}
+            onNavigateCommunity={() => handleNavigate('comunidade')}
+            onUpdateOwnProfile={handleUpdateOwnProfile}
+            onSaveProfileCustomization={handleSaveProfileCustomization}
+            onToggleProfileBadge={handleToggleProfileBadge}
+            onToggleCommunityLike={handleToggleCommunityLike}
+            onCreateCommunityReply={handleCreateCommunityReply}
+            onDeleteCommunityPost={handleDeleteCommunityPost}
+            onDeleteCommunityReply={handleDeleteCommunityReply}
+            onToggleCommunityFollow={handleToggleCommunityFollow}
+            onOpenPremiumModal={() => setVipModalOpen(true)}
             platformSettings={platformSettings}
           />
         )}
@@ -1548,6 +3727,13 @@ export default function App() {
             book={selectedBook}
             allBooks={books}
             userLibrary={userLibrary}
+            userProfile={userProfile}
+            bookReviews={bookReviews}
+            publicProfilesMap={publicProfilesMap}
+            communityFollows={communityFollows}
+            isAdmin={isAdmin}
+            initialScrollToReviews={scrollToReviewsOnDetail}
+            onClearScrollToReviews={() => setScrollToReviewsOnDetail(false)}
             onBack={() => handleNavigate(previousView)}
             onReadBook={openBookReader}
             onSelectBook={openBookDetail}
@@ -1555,6 +3741,12 @@ export default function App() {
             onToggleFavorite={handleToggleFavorite}
             onChangeStatus={handleChangeStatus}
             onRateBook={handleRateBook}
+            onSaveBookReview={handleSaveBookReview}
+            onDeleteBookReview={handleDeleteBookReview}
+            onToggleCommunityFollow={handleToggleCommunityFollow}
+            onSubmitReport={handleSubmitCommunityReport}
+            onRequireAuth={() => handleNavigate('perfil')}
+            onOpenPremiumModal={() => setVipModalOpen(true)}
             readButtonText={platformSettings.readButtonText}
             ratingPromptText={platformSettings.ratingPromptText}
             relatedBooksPrefix={platformSettings.relatedBooksPrefix}
@@ -1597,62 +3789,46 @@ export default function App() {
         onSelectFormat={handleSelectReadingFormat}
       />
 
-      {/* VIP Modal */}
-      {vipModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
-          <div className="relative w-full max-w-md rounded-2xl border border-[#FFB800]/30 bg-gradient-to-b from-[#1A1409] to-[#0D0D11] p-6 sm:p-8 shadow-2xl">
-            <button
-              type="button"
-              onClick={() => setVipModalOpen(false)}
-              className="absolute top-4 right-4 rounded-full p-1.5 text-zinc-400 hover:bg-white/10 hover:text-white cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#FFB800] text-black shadow-lg mb-5">
-              <Crown className="w-7 h-7 stroke-[2.2]" />
-            </div>
-
-            <div className="inline-flex items-center gap-1 rounded-full border border-[#FFB800]/40 bg-[#FFB800]/15 px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-[#FFB800] mb-2">
-              <Sparkles className="w-3 h-3" /> Oferta Especial SÓ HOJE
-            </div>
-
-            <h3 className="font-display text-2xl sm:text-3xl font-extrabold text-white">
-              Livroflix VIP
-            </h3>
-            <p className="mt-1 text-sm text-zinc-300">
-              Acesso total e irrestrito a toda a biblioteca digital por apenas{' '}
-              <strong className="text-[#FFB800]">R$ 11,90/mês</strong>.
-            </p>
-
-            <ul className="mt-5 space-y-2.5 text-xs sm:text-sm text-zinc-200">
-              <li className="flex items-center gap-2.5">
-                <Check className="w-4 h-4 text-[#FFB800] flex-shrink-0" />
-                <span>Leitura digital ilimitada de todos os livros do catálogo</span>
-              </li>
-              <li className="flex items-center gap-2.5">
-                <Check className="w-4 h-4 text-[#FFB800] flex-shrink-0" />
-                <span>Downloads offline e sincronização automática na nuvem</span>
-              </li>
-              <li className="flex items-center gap-2.5">
-                <Check className="w-4 h-4 text-[#FFB800] flex-shrink-0" />
-                <span>Modos de leitura avançados (Claro, Sépia e Noturno) sem anúncios</span>
-              </li>
-            </ul>
-
-            <button
-              type="button"
-              onClick={() => {
-                setVipSubscribed(true);
-                setTimeout(() => setVipModalOpen(false), 1200);
-              }}
-              className="mt-6 w-full rounded-xl bg-[#FFB800] hover:bg-[#FFA000] py-3.5 text-sm font-extrabold text-black shadow-lg transition-transform hover:scale-[1.01] cursor-pointer"
-            >
-              {vipSubscribed ? '✓ Assinatura VIP Ativada!' : 'Ativar Acesso VIP Agora'}
-            </button>
-          </div>
-        </div>
+      {/* Animação de Formação de Selo (Somente para conquistas COM selo recém-desbloqueadas) */}
+      {badgeUnlockQueue.length > 0 && (
+        <BadgeUnlockModal
+          key={badgeUnlockQueue[0].id}
+          achievement={badgeUnlockQueue[0]}
+          isDisplayedOnProfile={Boolean(
+            badgeUnlockQueue[0].badgeId &&
+              userProfile?.profileBadges?.includes(badgeUnlockQueue[0].badgeId)
+          )}
+          onToggleDisplayOnProfile={handleToggleProfileBadge}
+          onClose={() => setBadgeUnlockQueue((prev) => prev.slice(1))}
+          customBadgeImages={platformSettings.badgeImages}
+        />
       )}
+
+      {/* Aviso discreto para conquistas SEM selo recém-concluídas */}
+      {badgeUnlockQueue.length === 0 && commonAchievementQueue.length > 0 && (
+        <CommonAchievementUnlockedBanner
+          key={commonAchievementQueue[0].id}
+          achievement={commonAchievementQueue[0]}
+          onClose={() => setCommonAchievementQueue((prev) => prev.slice(1))}
+        />
+      )}
+
+      {/* LIVROFLIX Premium Modal (R$ 11,00 / mês) */}
+      <PremiumModal
+        isOpen={vipModalOpen}
+        userProfile={userProfile}
+        isAuthenticated={Boolean(firebaseUser || userProfile)}
+        onClose={() => setVipModalOpen(false)}
+        onToggleSubscription={handleTogglePremiumSubscription}
+        onOpenLogin={() => {
+          setVipModalOpen(false);
+          handleNavigate('perfil');
+        }}
+        onOpenCustomization={() => {
+          setVipModalOpen(false);
+          handleNavigate('perfil');
+        }}
+      />
 
       {/* FOOTER */}
       <footer
@@ -1698,6 +3874,13 @@ export default function App() {
                 {platformSettings.navDownloadsText || 'Downloads'}
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => handleNavigate('comunidade')}
+              className="hover:text-[#60A5FA] transition-colors cursor-pointer"
+            >
+              Comunidade
+            </button>
           </div>
         </div>
       </footer>

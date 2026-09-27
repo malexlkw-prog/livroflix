@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+    
+  <defs>
+    <linearGradient id="antiqueGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F6E29F"/>
+      <stop offset="35%" stop-color="#D4AF61"/>
+      <stop offset="70%" stop-color="#A67C37"/>
+      <stop offset="100%" stop-color="#6E4E1E"/>
+    </linearGradient>
+    <linearGradient id="brightGold" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFF3C4"/>
+      <stop offset="50%" stop-color="#E5C168"/>
+      <stop offset="100%" stop-color="#9B722C"/>
+    </linearGradient>
+    <linearGradient id="silverGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F8FAFC"/>
+      <stop offset="45%" stop-color="#CBD5E1"/>
+      <stop offset="80%" stop-color="#64748B"/>
+      <stop offset="100%" stop-color="#334155"/>
+    </linearGradient>
+    <linearGradient id="pageLight" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#E8DCC4"/>
+      <stop offset="45%" stop-color="#FAF4E8"/>
+      <stop offset="50%" stop-color="#C8B696"/>
+      <stop offset="55%" stop-color="#FAF4E8"/>
+      <stop offset="100%" stop-color="#DFD0B5"/>
+    </linearGradient>
+    <radialGradient id="navySky" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#102A45"/>
+      <stop offset="65%" stop-color="#07172B"/>
+      <stop offset="100%" stop-color="#030A14"/>
+    </radialGradient>
+    <radialGradient id="parchmentBg" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#F7EFE0"/>
+      <stop offset="75%" stop-color="#DFCFAF"/>
+      <stop offset="100%" stop-color="#C2AE88"/>
+    </radialGradient>
+    <radialGradient id="burgundyBg" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#5B131E"/>
+      <stop offset="70%" stop-color="#33080E"/>
+      <stop offset="100%" stop-color="#190306"/>
+    </radialGradient>
+    <filter id="dropShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+
+    <path d="M256 24 L436 126 L436 346 L256 486 L76 346 L76 126 Z" fill="url(#antiqueGold)" stroke="#1E293B" stroke-width="5" filter="url(#dropShadow)"/>
+    <path d="M256 42 L418 136 L418 336 L256 466 L94 336 L94 136 Z" fill="#061A23" stroke="url(#brightGold)" stroke-width="4"/>
+    <!-- Row of Standing Hardcover Tomes -->
+    <g transform="translate(0, 6)">
+      <rect x="118" y="182" width="28" height="128" rx="3" fill="#164E63" stroke="#D4AF61" stroke-width="2"/>
+      <rect x="148" y="160" width="32" height="150" rx="3" fill="#7C2D12" stroke="#D4AF61" stroke-width="2"/>
+      <rect x="182" y="138" width="36" height="172" rx="4" fill="#1E3A5F" stroke="#D4AF61" stroke-width="2.5"/>
+      <rect x="220" y="152" width="34" height="158" rx="3" fill="#115E59" stroke="#D4AF61" stroke-width="2.5"/>
+      <rect x="256" y="128" width="38" height="182" rx="4" fill="#B45309" stroke="#F6E29F" stroke-width="2.5"/>
+      <rect x="296" y="148" width="34" height="162" rx="3" fill="#7F1D1D" stroke="#D4AF61" stroke-width="2.5"/>
+      <rect x="332" y="168" width="30" height="142" rx="3" fill="#78350F" stroke="#D4AF61" stroke-width="2"/>
+      <rect x="364" y="180" width="28" height="130" rx="3" fill="#1E293B" stroke="#D4AF61" stroke-width="2"/>
+      <!-- Curved Golden Shelf Base -->
+      <path d="M108 314 Q256 284 404 314" fill="none" stroke="url(#brightGold)" stroke-width="7" stroke-linecap="round"/>
+    </g>
+    <!-- Typography -->
+    <text x="256" y="366" text-anchor="middle" fill="#F8FAFC" font-family="Georgia, serif" font-weight="bold" font-size="26" letter-spacing="2">BIBLIOTECA</text>
+    <text x="256" y="400" text-anchor="middle" fill="#F6E29F" font-family="Georgia, serif" font-weight="bold" font-size="25" letter-spacing="1.5">AMBULANTE</text>
+  </svg>

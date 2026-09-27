@@ -1,4 +1,6 @@
-import { Book } from '../types';
+import { Book, UserProfile } from '../types';
+import { auth } from '../firebase';
+import { canBookBeDownloaded, isUserPremium } from './premiumUtils';
 
 const LIVROFLIX_PRODUCTION_PDF_STREAM =
   'https://livroflix-api.onrender.com/api/github/pdf-stream';
@@ -88,10 +90,20 @@ export async function fetchPdfBinaryData(
   throw new Error(lastError);
 }
 
-export async function downloadBookPdf(book: Book): Promise<void> {
-  const pdfUrl = (book.readingOptions?.pdf?.url || book.pdfUrl || '').trim();
-  if (!pdfUrl) {
-    throw new Error('Este livro ainda não possui um arquivo PDF disponível.');
+export async function downloadBookPdf(
+  book: Book,
+  userProfile?: Pick<UserProfile, 'uid' | 'premium'> | null
+): Promise<void> {
+  if (!isUserPremium(userProfile)) {
+    throw new Error(
+      'O download de livros é exclusivo para assinantes LIVROFLIX Premium.'
+    );
+  }
+
+  if (!canBookBeDownloaded(book)) {
+    throw new Error(
+      'Este livro não está disponível para download.'
+    );
   }
 
   const sanitizedTitle = (book.titulo || 'livro')
@@ -102,34 +114,95 @@ export async function downloadBookPdf(book: Book): Promise<void> {
     ? baseName
     : `${baseName}.pdf`;
 
+  const uid = userProfile?.uid || auth.currentUser?.uid || '';
+  let idToken = '';
   try {
-    const pdfBytes = await fetchPdfBinaryData(pdfUrl);
-    const arrayBuffer = pdfBytes.buffer.slice(
-      pdfBytes.byteOffset,
-      pdfBytes.byteOffset + pdfBytes.byteLength
-    ) as ArrayBuffer;
-    const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
-    const blobUrl = URL.createObjectURL(blob);
-
-    const link = document.createElement('a');
-    link.href = blobUrl;
-    link.download = fileName;
-    link.style.display = 'none';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    setTimeout(() => {
-      URL.revokeObjectURL(blobUrl);
-    }, 15000);
+    if (auth.currentUser) {
+      idToken = await auth.currentUser.getIdToken();
+    }
   } catch {
-    // Fallback direto para a URL do PDF (GitHub Releases já possui Content-Disposition: attachment)
-    const link = document.createElement('a');
-    link.href = pdfUrl;
-    link.download = fileName;
-    link.style.display = 'none';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    idToken = '';
   }
+
+  // 1. Tenta o endpoint seguro de download Premium no backend (/api/premium/download-book)
+  if (uid) {
+    try {
+      const headers: Record<string, string> = {};
+      if (idToken) {
+        headers.Authorization = `Bearer ${idToken}`;
+      }
+      const resp = await fetch(
+        `/api/premium/download-book?bookId=${encodeURIComponent(
+          book.id
+        )}&uid=${encodeURIComponent(uid)}`,
+        {
+          method: 'GET',
+          headers,
+        }
+      );
+
+      if (resp.status === 403) {
+        const errBody = await resp.json().catch(() => null);
+        throw new Error(
+          errBody?.error ||
+            'Você não possui permissão para baixar este livro.'
+        );
+      }
+
+      if (resp.ok) {
+        const buffer = await resp.arrayBuffer();
+        if (hasPdfMagicHeader(buffer)) {
+          const blob = new Blob([buffer], { type: 'application/pdf' });
+          const blobUrl = URL.createObjectURL(blob);
+
+          const link = document.createElement('a');
+          link.href = blobUrl;
+          link.download = fileName;
+          link.style.display = 'none';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+
+          setTimeout(() => {
+            URL.revokeObjectURL(blobUrl);
+          }, 15000);
+          return;
+        }
+      }
+    } catch (err) {
+      if (
+        err instanceof Error &&
+        (err.message.includes('exclusivo') ||
+          err.message.includes('permissão'))
+      ) {
+        throw err;
+      }
+    }
+  }
+
+  // 2. Fallback seguro de stream binário caso o livro já esteja validado para download
+  const pdfUrl = (book.readingOptions?.pdf?.url || book.pdfUrl || '').trim();
+  if (!pdfUrl) {
+    throw new Error('Este livro ainda não possui um arquivo PDF disponível.');
+  }
+
+  const pdfBytes = await fetchPdfBinaryData(pdfUrl);
+  const arrayBuffer = pdfBytes.buffer.slice(
+    pdfBytes.byteOffset,
+    pdfBytes.byteOffset + pdfBytes.byteLength
+  ) as ArrayBuffer;
+  const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+  const blobUrl = URL.createObjectURL(blob);
+
+  const link = document.createElement('a');
+  link.href = blobUrl;
+  link.download = fileName;
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+
+  setTimeout(() => {
+    URL.revokeObjectURL(blobUrl);
+  }, 15000);
 }

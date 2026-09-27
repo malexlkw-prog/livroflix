@@ -393,6 +393,179 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+const FIREBASE_PROJECT_ID =
+  process.env.FIREBASE_PROJECT_ID || 'livroflix-b1978';
+const FIREBASE_DATABASE_ID =
+  process.env.FIREBASE_DATABASE_ID ||
+  'ai-studio-livroflix-6301ff67-f140-45b7-95b7-2395f073ee5b';
+
+async function fetchFirestoreDocument(collectionName, docId, bearerToken) {
+  const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+    FIREBASE_PROJECT_ID
+  )}/databases/${encodeURIComponent(
+    FIREBASE_DATABASE_ID
+  )}/documents/${encodeURIComponent(collectionName)}/${encodeURIComponent(
+    docId
+  )}`;
+  const headers = {
+    Accept: 'application/json',
+  };
+  if (bearerToken) {
+    headers.Authorization = `Bearer ${bearerToken}`;
+  }
+  const resp = await fetch(url, { method: 'GET', headers });
+  if (!resp.ok) {
+    return null;
+  }
+  return await resp.json();
+}
+
+app.get('/api/premium/download-book', async (req, res) => {
+  try {
+    const bookId = String(req.query.bookId || '').trim();
+    const uid = String(req.query.uid || '').trim();
+    const authHeader = String(req.headers.authorization || '').trim();
+    const bearerToken = authHeader.toLowerCase().startsWith('bearer ')
+      ? authHeader.slice(7).trim()
+      : '';
+
+    if (!bookId || !uid) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Parâmetros de livro ou usuário ausentes.',
+      });
+    }
+
+    // 1. Verificar assinatura Premium do usuário no Firestore (users/{uid} ou public_profiles/{uid})
+    let isPremiumVerified = false;
+    const userDoc = await fetchFirestoreDocument('users', uid, bearerToken);
+    if (userDoc?.fields?.premium?.booleanValue === true) {
+      isPremiumVerified = true;
+    } else {
+      const publicProfileDoc = await fetchFirestoreDocument(
+        'public_profiles',
+        uid,
+        ''
+      );
+      if (publicProfileDoc?.fields?.premium?.booleanValue === true) {
+        isPremiumVerified = true;
+      }
+    }
+
+    if (!isPremiumVerified) {
+      return res.status(403).json({
+        ok: false,
+        error:
+          'Este recurso é exclusivo para assinantes LIVROFLIX Premium.',
+      });
+    }
+
+    // 2. Verificar disponibilidade e permissão de download do livro no Firestore
+    const bookDoc = await fetchFirestoreDocument('books', bookId, '');
+    const fields = bookDoc?.fields;
+    if (!fields) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Livro não encontrado no catálogo.',
+      });
+    }
+
+    const status = fields.status?.stringValue || 'ativo';
+    const allowDownload =
+      fields.allowDownload?.booleanValue !== undefined
+        ? fields.allowDownload.booleanValue
+        : true;
+
+    if (status !== 'ativo' || allowDownload === false) {
+      return res.status(403).json({
+        ok: false,
+        error: 'Este livro não possui permissão para download.',
+      });
+    }
+
+    const nestedPdfUrl =
+      fields.readingOptions?.mapValue?.fields?.pdf?.mapValue?.fields?.url
+        ?.stringValue || '';
+    const directPdfUrl = fields.pdfUrl?.stringValue || '';
+    const targetUrl = (nestedPdfUrl || directPdfUrl).trim();
+
+    if (!targetUrl) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Este livro não possui arquivo PDF disponível para download.',
+      });
+    }
+
+    let parsed;
+    try {
+      parsed = new URL(targetUrl);
+    } catch {
+      return res.status(400).json({
+        ok: false,
+        error: 'URL do arquivo PDF inválida.',
+      });
+    }
+
+    const isAllowedHost =
+      parsed.protocol === 'https:' &&
+      (parsed.hostname === 'github.com' ||
+        parsed.hostname.endsWith('.githubusercontent.com'));
+
+    if (!isAllowedHost) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Origem não autorizada para download de PDF.',
+      });
+    }
+
+    const upstreamHeaders = {
+      'User-Agent': 'livroflix-api-premium-downloader',
+      Accept: 'application/pdf,application/octet-stream,*/*',
+    };
+
+    const upstream = await fetch(parsed.toString(), {
+      method: 'GET',
+      redirect: 'follow',
+      headers: upstreamHeaders,
+    });
+
+    if (!upstream.ok || !upstream.body) {
+      return res.status(upstream.status || 502).json({
+        ok: false,
+        error: `Falha ao obter o arquivo PDF para download (HTTP ${upstream.status}).`,
+      });
+    }
+
+    const bookTitle = fields.titulo?.stringValue || bookId || 'livro';
+    const sanitizedTitle = bookTitle
+      .replace(/[<>:"/\\|?*\x00-\x1F]+/g, '')
+      .trim();
+    const safeDownloadName = `${sanitizedTitle || 'livro'}.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodeURIComponent(safeDownloadName)}"`
+    );
+    res.setHeader('Cache-Control', 'private, no-store');
+
+    const contentLength = upstream.headers.get('content-length');
+    if (contentLength) {
+      res.setHeader('Content-Length', contentLength);
+    }
+
+    Readable.fromWeb(upstream.body).pipe(res);
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : 'Erro interno ao processar o download Premium.',
+    });
+  }
+});
+
 app.get('/api/github/pdf-stream', async (req, res) => {
   try {
     const targetUrl = String(req.query.url || '').trim();

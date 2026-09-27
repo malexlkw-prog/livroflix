@@ -53,9 +53,13 @@
       "type": "object",
       "properties": {
         "uid": { "type": "string" },
-        "nome": { "type": "string" },
+        "nome": { "type": "string", "maxLength": 80 },
+        "displayName": { "type": "string", "maxLength": 80 },
+        "username": { "type": "string", "maxLength": 30, "pattern": "^[a-z0-9._]{3,30}$" },
+        "bio": { "type": "string", "maxLength": 300 },
         "email": { "type": "string" },
         "foto": { "type": "string" },
+        "photoURL": { "type": "string" },
         "role": { "type": "string", "enum": ["user", "admin"] },
         "streakDays": { "type": "number" },
         "totalMinutesRead": { "type": "number" },
@@ -69,9 +73,29 @@
             "theme": { "type": "string", "enum": ["dark", "sepia", "light"] }
           }
         },
+        "profileCustomization": {
+          "type": "object",
+          "description": "Aesthetic profile customization (background, banner, decorative effects, and theme)"
+        },
+        "favoriteBooks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Up to 3 catalog book IDs highlighted on the user profile"
+        },
         "updatedAt": { "type": "string" }
       },
       "required": ["uid", "nome", "role"]
+    },
+    "UsernameReservation": {
+      "title": "UsernameReservation",
+      "description": "Unique username reservation mapping @username to user uid",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "username": { "type": "string", "maxLength": 30, "pattern": "^[a-z0-9._]{3,30}$" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["uid", "username"]
     },
     "UserBookItem": {
       "title": "UserBookItem",
@@ -150,6 +174,151 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["id", "siteName", "primaryColor", "backgroundColor", "top10Mode", "catalogSeeded"]
+    },
+    "PublicProfile": {
+      "title": "PublicProfile",
+      "description": "Public literary profile card for community interactions (excludes private email and role)",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string", "maxLength": 80 },
+        "username": { "type": "string", "maxLength": 30 },
+        "bio": { "type": "string", "maxLength": 300 },
+        "photoURL": { "type": "string" },
+        "profileCustomization": {
+          "type": "object",
+          "description": "Public aesthetic profile customization (background, banner, decorative effects, and theme)"
+        },
+        "favoriteBooks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Up to 3 catalog book IDs highlighted on the public profile"
+        },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["uid", "displayName", "username", "updatedAt"]
+    },
+    "CommunityPost": {
+      "title": "CommunityPost",
+      "description": "Short literary community post (up to 300 characters) with optional image and linked catalog bookId",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string", "maxLength": 80 },
+        "authorUsername": { "type": "string", "maxLength": 30 },
+        "authorPhoto": { "type": "string" },
+        "text": { "type": "string", "maxLength": 300 },
+        "imageUrl": { "type": "string" },
+        "bookId": { "type": "string" },
+        "mentions": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "authorId", "authorName", "authorUsername", "text", "createdAt"]
+    },
+    "CommunityLike": {
+      "title": "CommunityLike",
+      "description": "Individual like on a community post",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "postId": { "type": "string" },
+        "userId": { "type": "string" },
+        "postAuthorId": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "postId", "userId", "postAuthorId", "createdAt"]
+    },
+    "CommunityReply": {
+      "title": "CommunityReply",
+      "description": "Reply to a community post or nested conversation reply (up to 300 characters)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "postId": { "type": "string" },
+        "postAuthorId": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string", "maxLength": 80 },
+        "authorUsername": { "type": "string", "maxLength": 30 },
+        "authorPhoto": { "type": "string" },
+        "text": { "type": "string", "maxLength": 300 },
+        "parentReplyId": { "type": "string" },
+        "replyToUsername": { "type": "string", "maxLength": 30 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "postId", "postAuthorId", "authorId", "authorName", "authorUsername", "text", "createdAt"]
+    },
+    "CommunityFollow": {
+      "title": "CommunityFollow",
+      "description": "Follow relationship between two readers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "followerId": { "type": "string" },
+        "followingId": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "followerId", "followingId", "createdAt"]
+    },
+    "CommunityNotification": {
+      "title": "CommunityNotification",
+      "description": "Notification for follow, like, reply, or @username mention events",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "recipientId": { "type": "string" },
+        "actorId": { "type": "string" },
+        "actorName": { "type": "string", "maxLength": 80 },
+        "actorUsername": { "type": "string", "maxLength": 30 },
+        "actorPhoto": { "type": "string" },
+        "type": { "type": "string", "enum": ["follow", "like", "reply", "mention"] },
+        "postId": { "type": "string" },
+        "replyId": { "type": "string" },
+        "snippet": { "type": "string", "maxLength": 300 },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "recipientId", "actorId", "actorName", "actorUsername", "type", "read", "createdAt"]
+    },
+    "CommunityReport": {
+      "title": "CommunityReport",
+      "description": "Moderation report for posts, reviews, or users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "reporterId": { "type": "string" },
+        "reporterName": { "type": "string", "maxLength": 80 },
+        "targetType": { "type": "string", "enum": ["post", "user", "review"] },
+        "targetPostId": { "type": "string" },
+        "targetReviewId": { "type": "string" },
+        "targetBookId": { "type": "string" },
+        "targetUserId": { "type": "string" },
+        "targetUsername": { "type": "string", "maxLength": 30 },
+        "reason": { "type": "string", "maxLength": 200 },
+        "details": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["pending", "reviewed", "dismissed"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "reporterId", "reporterName", "targetType", "targetUserId", "reason", "status", "createdAt"]
+    },
+    "BookReview": {
+      "title": "BookReview",
+      "description": "Literary review (resenha) written by a user for a specific catalog book (1 to 500 characters)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "bookId": { "type": "string" },
+        "userId": { "type": "string" },
+        "authorName": { "type": "string", "maxLength": 80 },
+        "authorUsername": { "type": "string", "maxLength": 30 },
+        "authorPhoto": { "type": "string" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "rating": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "bookId", "userId", "authorName", "authorUsername", "text", "createdAt"]
     }
   },
   "firestore": {
@@ -172,6 +341,42 @@
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserProfile" },
       "description": "User profile document isolated per user (readable by owner and admin)"
+    },
+    "/usernames/{username}": {
+      "schema": { "$ref": "#/entities/UsernameReservation" },
+      "description": "Unique username reservation index ensuring no two users share the same @username"
+    },
+    "/public_profiles/{userId}": {
+      "schema": { "$ref": "#/entities/PublicProfile" },
+      "description": "Public literary profile card for community display and @username mentions"
+    },
+    "/community_posts/{postId}": {
+      "schema": { "$ref": "#/entities/CommunityPost" },
+      "description": "Community feed posts (up to 300 characters) with optional image and linked bookId"
+    },
+    "/community_likes/{likeId}": {
+      "schema": { "$ref": "#/entities/CommunityLike" },
+      "description": "Individual post likes stored as separate documents"
+    },
+    "/community_replies/{replyId}": {
+      "schema": { "$ref": "#/entities/CommunityReply" },
+      "description": "Individual replies to community posts stored as separate documents"
+    },
+    "/community_follows/{followId}": {
+      "schema": { "$ref": "#/entities/CommunityFollow" },
+      "description": "Individual user follow relationships stored as separate documents"
+    },
+    "/community_notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/CommunityNotification" },
+      "description": "Per-user community notifications for follows, likes, replies, and mentions"
+    },
+    "/community_reports/{reportId}": {
+      "schema": { "$ref": "#/entities/CommunityReport" },
+      "description": "User-submitted moderation reports for posts, reviews, or users"
+    },
+    "/book_reviews/{reviewId}": {
+      "schema": { "$ref": "#/entities/BookReview" },
+      "description": "Literary reviews linked to specific catalog books (livro -> reviews -> usuario)"
     },
     "/users/{userId}/library/{bookId}": {
       "schema": { "$ref": "#/entities/UserBookItem" },

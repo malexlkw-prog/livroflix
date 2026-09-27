@@ -59,6 +59,7 @@ export interface Book {
   pdfFileName?: string;
   pdfSize?: number;
   pdfUpdatedAt?: string;
+  allowDownload?: boolean;
   capitulos?: BookChapter[];
   status: BookStatus;
   destaque: boolean;
@@ -90,15 +91,64 @@ export interface UserBookItem {
   ultimoAcesso: string;
 }
 
+export type ProfileBackgroundType = 'default' | 'solid' | 'gradient' | 'preset-image' | 'custom-image';
+
+export interface ProfileBackgroundConfig {
+  type: ProfileBackgroundType;
+  value: string; // CSS color, CSS gradient, preset image URL, or custom dataURL/URL
+  presetId?: string;
+}
+
+export type ProfileBannerType = 'none' | 'preset' | 'custom';
+
+export interface ProfileBannerConfig {
+  type: ProfileBannerType;
+  value: string; // Preset banner URL or custom dataURL/URL
+  presetId?: string;
+  positionY?: number; // 0 to 100 (default 50)
+}
+
+export type ProfileEffectId =
+  | 'none'
+  | 'subtle-glow'
+  | 'starlight-particles'
+  | 'paper-texture'
+  | 'geometric-grid'
+  | 'literary-vignette'
+  | 'warm-sepia-mist'
+  | 'golden-aura'
+  | 'royal-constellation';
+
+export interface ProfileCustomization {
+  background?: ProfileBackgroundConfig;
+  banner?: ProfileBannerConfig;
+  effects?: ProfileEffectId;
+  theme?: string; // e.g., 'biblioteca' | 'noite' | 'oceano' | 'vintage' | 'fantasia' | 'papel-antigo' | 'minimalista' | 'floresta' | 'ceu-estrelado' | 'custom'
+  usernameColor?: string;
+  updatedAt?: string;
+}
+
 export interface UserProfile {
   uid: string;
   nome: string;
+  displayName?: string;
+  username?: string;
+  bio?: string;
   email: string;
   foto: string;
+  photoURL?: string;
   role: 'user' | 'admin';
+  premium?: boolean;
+  usernameColor?: string;
   streakDays: number;
   totalMinutesRead: number;
   preferenciasLeitor?: ReaderPreferences;
+  profileCustomization?: ProfileCustomization;
+  favoriteBooks?: string[];
+  profileFavoriteBooks?: string[];
+  unlockedBadges?: string[];
+  profileBadges?: string[];
+  nightReadingsCount?: number;
   updatedAt: string;
 }
 
@@ -190,14 +240,121 @@ export interface PlatformSettings {
   defaultReaderFontSize?: number;
   defaultReaderFontFamily?: 'editorial' | 'classic' | 'modern';
   showProfileAchievements?: boolean;
+  badgeImages?: Record<string, string>;
 
   // Controle de Migração
   catalogSeeded: boolean;
   updatedAt: string;
 }
 
+export interface PublicProfile {
+  uid: string;
+  displayName: string;
+  username: string;
+  bio?: string;
+  photoURL?: string;
+  premium?: boolean;
+  usernameColor?: string;
+  profileCustomization?: ProfileCustomization;
+  favoriteBooks?: string[];
+  profileFavoriteBooks?: string[];
+  unlockedBadges?: string[];
+  profileBadges?: string[];
+  updatedAt: string;
+}
+
+export interface CommunityPost {
+  id: string;
+  authorId: string;
+  authorName: string;
+  authorUsername: string;
+  authorPhoto?: string;
+  text: string;
+  imageUrl?: string;
+  bookId?: string;
+  mentions?: string[];
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface CommunityLike {
+  id: string;
+  postId: string;
+  userId: string;
+  postAuthorId: string;
+  createdAt: string;
+}
+
+export interface CommunityReply {
+  id: string;
+  postId: string;
+  postAuthorId: string;
+  authorId: string;
+  authorName: string;
+  authorUsername: string;
+  authorPhoto?: string;
+  text: string;
+  parentReplyId?: string;
+  replyToUsername?: string;
+  createdAt: string;
+}
+
+export interface CommunityFollow {
+  id: string;
+  followerId: string;
+  followingId: string;
+  createdAt: string;
+}
+
+export type CommunityNotificationType = 'follow' | 'like' | 'reply' | 'mention';
+
+export interface CommunityNotification {
+  id: string;
+  recipientId: string;
+  actorId: string;
+  actorName: string;
+  actorUsername: string;
+  actorPhoto?: string;
+  type: CommunityNotificationType;
+  postId?: string;
+  replyId?: string;
+  snippet?: string;
+  read: boolean;
+  createdAt: string;
+}
+
+export interface CommunityReport {
+  id: string;
+  reporterId: string;
+  reporterName: string;
+  targetType: 'post' | 'user' | 'review';
+  targetPostId?: string;
+  targetReviewId?: string;
+  targetBookId?: string;
+  targetUserId: string;
+  targetUsername?: string;
+  reason: string;
+  details?: string;
+  status: 'pending' | 'reviewed' | 'dismissed';
+  createdAt: string;
+}
+
+export interface BookReview {
+  id: string;
+  bookId: string;
+  userId: string;
+  authorName: string;
+  authorUsername: string;
+  authorPhoto?: string;
+  text: string;
+  rating?: number;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export type ActiveView =
   | 'home'
+  | 'comunidade'
   | 'categorias'
   | 'minha-lista'
   | 'downloads'

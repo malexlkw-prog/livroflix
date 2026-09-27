@@ -4,19 +4,26 @@ import {
   User as UserIcon,
   ShieldCheck,
   ChevronDown,
+  Crown,
 } from 'lucide-react';
 import { ActiveView, PlatformSettings, UserProfile } from '../types';
 import { LivroflixLogo } from './LivroflixLogo';
+import {
+  getEffectiveUsernameColor,
+  isUserPremium,
+} from '../utils/premiumUtils';
 
 interface HeaderProps {
   activeView: ActiveView;
   selectedCategory: string | null;
   onNavigate: (view: ActiveView) => void;
   onSelectCategory: (category: string) => void;
+  onOpenPremiumModal?: () => void;
   userProfile: UserProfile | null;
   isAdmin: boolean;
   downloadsCount: number;
   myListCount: number;
+  unreadCommunityCount?: number;
   categoriesList?: string[];
   platformSettings?: PlatformSettings;
 }
@@ -43,10 +50,12 @@ export const Header: React.FC<HeaderProps> = ({
   selectedCategory,
   onNavigate,
   onSelectCategory,
+  onOpenPremiumModal,
   userProfile,
   isAdmin,
   downloadsCount,
   myListCount,
+  unreadCommunityCount = 0,
   categoriesList = BOOK_CATEGORIES_LIST,
   platformSettings,
 }) => {
@@ -54,7 +63,7 @@ export const Header: React.FC<HeaderProps> = ({
   const navMyListText = platformSettings?.navMyListText || 'Minha lista';
   const navDownloadsText = platformSettings?.navDownloadsText || 'Downloads';
   const navCategoriesText = platformSettings?.navCategoriesText || 'Categorias';
-  const showDownloadsTab = platformSettings?.showDownloadsTab !== false;
+  const showDownloadsTab = false;
   const showCategoriesTab = platformSettings?.showCategoriesTab !== false;
   const showSearchButton = platformSettings?.showSearchButton !== false;
   const [scrolled, setScrolled] = useState(false);
@@ -109,7 +118,7 @@ export const Header: React.FC<HeaderProps> = ({
               />
             </button>
 
-            {/* Desktop Top Navigation Tabs: Início | Minha lista | Downloads | Categorias */}
+            {/* Desktop Top Navigation Tabs: Início | Minha lista | Downloads | Categorias | Comunidade */}
             <nav className="hidden lg:flex items-center gap-6">
               <button
                 type="button"
@@ -190,6 +199,21 @@ export const Header: React.FC<HeaderProps> = ({
                 </div>
               )}
 
+              <button
+                type="button"
+                onClick={() => {
+                  setCatDropdownOpen(false);
+                  onNavigate('comunidade');
+                }}
+                className={`text-sm font-medium transition-colors flex items-center gap-1.5 cursor-pointer ${
+                  activeView === 'comunidade' && !catDropdownOpen
+                    ? 'text-[#60A5FA] font-bold'
+                    : 'text-blue-100/80 hover:text-white'
+                }`}
+              >
+                <span>Comunidade</span>
+              </button>
+
               {isAdmin && (
                 <button
                   type="button"
@@ -210,8 +234,8 @@ export const Header: React.FC<HeaderProps> = ({
             </nav>
           </div>
 
-          {/* Right: Search Icon & User Profile */}
-          <div className="flex items-center gap-2.5 sm:gap-4">
+          {/* Right: Search Icon, Premium Crown Button & User Profile */}
+          <div className="flex items-center gap-2 sm:gap-3">
             {showSearchButton && (
               <button
                 type="button"
@@ -228,6 +252,29 @@ export const Header: React.FC<HeaderProps> = ({
                 }`}
               >
                 <Search className="w-4 h-4 stroke-[2.2]" />
+              </button>
+            )}
+
+            {/* Botão LIVROFLIX Premium (Coroa 👑) */}
+            {onOpenPremiumModal && (
+              <button
+                type="button"
+                onClick={() => {
+                  setCatDropdownOpen(false);
+                  onOpenPremiumModal();
+                }}
+                aria-label="LIVROFLIX Premium"
+                title="LIVROFLIX Premium"
+                className={`inline-flex items-center gap-1.5 rounded-full py-1.5 px-2.5 sm:px-3.5 text-xs font-bold transition-all cursor-pointer border ${
+                  isUserPremium(userProfile)
+                    ? 'bg-gradient-to-r from-amber-500/20 to-amber-400/10 border-amber-400/50 text-amber-300 hover:border-amber-300 shadow-[0_0_18px_rgba(245,158,11,0.2)]'
+                    : 'bg-[#071426]/90 hover:bg-amber-500/15 border-amber-400/35 hover:border-amber-400/60 text-amber-300 hover:text-amber-200 shadow-[0_0_14px_rgba(245,158,11,0.12)]'
+                }`}
+              >
+                <Crown className="w-4 h-4 text-amber-400 stroke-[2.2] shrink-0" />
+                <span className="hidden sm:inline whitespace-nowrap">
+                  Premium
+                </span>
               </button>
             )}
 
@@ -257,15 +304,35 @@ export const Header: React.FC<HeaderProps> = ({
                   : 'border-blue-400/15 bg-blue-950/50 text-blue-100 hover:text-white hover:bg-blue-900/50'
               }`}
             >
-              <UserIcon className="w-4 h-4 text-[#60A5FA]" />
-              <span className="hidden md:inline text-xs sm:text-sm font-semibold text-white max-w-[140px] truncate">
-                {userProfile ? userProfile.nome : 'Perfil'}
+              {userProfile?.photoURL || userProfile?.foto ? (
+                <img
+                  src={userProfile.photoURL || userProfile.foto}
+                  alt={userProfile.displayName || userProfile.nome || 'Perfil'}
+                  className="w-5 h-5 rounded-full object-cover ring-1 ring-[#60A5FA]/60"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <UserIcon className="w-4 h-4 text-[#60A5FA]" />
+              )}
+              <span
+                className="hidden md:inline text-xs sm:text-sm font-semibold text-white max-w-[140px] truncate"
+                style={
+                  getEffectiveUsernameColor(userProfile)
+                    ? { color: getEffectiveUsernameColor(userProfile) }
+                    : undefined
+                }
+              >
+                {userProfile
+                  ? userProfile.username
+                    ? `@${userProfile.username.replace(/^@+/, '')}`
+                    : userProfile.displayName || userProfile.nome
+                  : 'Perfil'}
               </span>
             </button>
           </div>
         </div>
 
-        {/* Mobile/Tablet Top Navigation Row: Início | Minha lista | Downloads | Categorias */}
+        {/* Mobile/Tablet Top Navigation Row: Início | Minha lista | Downloads | Categorias | Comunidade */}
         <nav className="flex lg:hidden items-center gap-4 sm:gap-6 overflow-x-auto no-scrollbar border-t border-blue-400/10 pt-2 pb-0.5 text-xs sm:text-sm">
           <button
             type="button"
@@ -342,6 +409,21 @@ export const Header: React.FC<HeaderProps> = ({
               />
             </button>
           )}
+
+          <button
+            type="button"
+            onClick={() => {
+              setCatDropdownOpen(false);
+              onNavigate('comunidade');
+            }}
+            className={`whitespace-nowrap font-medium transition-colors flex items-center gap-1 cursor-pointer ${
+              activeView === 'comunidade' && !catDropdownOpen
+                ? 'text-[#60A5FA] font-bold'
+                : 'text-blue-200/80'
+            }`}
+          >
+            <span>Comunidade</span>
+          </button>
         </nav>
 
         {/* CAIXA DE CATEGORIAS DE LIVROS */}
