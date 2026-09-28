@@ -103,6 +103,30 @@ service cloud.firestore {
         (!('nightReadingsCount' in data) || (data.nightReadingsCount is number && data.nightReadingsCount >= 0));
     }
 
+    function isValidProfileHighlightPayload(data) {
+      return data.keys().hasAll(['name', 'photos', 'coverUrl', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['name', 'photos', 'coverUrl', 'createdAt', 'updatedAt']) &&
+        data.name is string &&
+        data.name.size() >= 1 &&
+        data.name.size() <= 30 &&
+        data.photos is list &&
+        data.photos.size() >= 1 &&
+        data.photos.size() <= 3 &&
+        data.photos[0] is string &&
+        data.photos[0].size() >= 1 &&
+        data.photos[0].size() <= 320000 &&
+        (data.photos.size() < 2 || (data.photos[1] is string && data.photos[1].size() >= 1 && data.photos[1].size() <= 320000)) &&
+        (data.photos.size() < 3 || (data.photos[2] is string && data.photos[2].size() >= 1 && data.photos[2].size() <= 320000)) &&
+        data.coverUrl is string &&
+        data.coverUrl == data.photos[0] &&
+        data.createdAt is string &&
+        data.createdAt.size() >= 1 &&
+        data.createdAt.size() <= 64 &&
+        data.updatedAt is string &&
+        data.updatedAt.size() >= 1 &&
+        data.updatedAt.size() <= 64;
+    }
+
     // ===============================================================
     // Users & Library (/users/{userId})
     // ===============================================================
@@ -156,8 +180,16 @@ service cloud.firestore {
       }
 
       match /profileCustomization/{docId} {
-        allow read: if true;
-        allow write: if isOwner(userId) || isAdmin();
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
+
+      match /highlights/{highlightId} {
+        allow read: if highlightId == 'profile';
+        allow create, update: if highlightId == 'profile' &&
+          (isOwner(userId) || isAdmin()) &&
+          isValidProfileHighlightPayload(request.resource.data);
+        allow delete: if highlightId == 'profile' &&
+          (isOwner(userId) || isAdmin());
       }
     }
 
@@ -174,13 +206,12 @@ service cloud.firestore {
         request.resource.data.uid == request.auth.uid &&
         request.resource.data.username == username
       );
-      allow update: if isAdmin() || (
-        isAuthenticated() &&
+      allow update: if (
+        resource.data.uid == request.resource.data.uid &&
         username.matches('^[a-z0-9._]{3,30}$') &&
-        resource.data.uid == request.auth.uid &&
         request.resource.data.keys().hasOnly(['uid', 'username', 'updatedAt']) &&
-        request.resource.data.uid == request.auth.uid &&
-        request.resource.data.username == username
+        request.resource.data.username == username &&
+        (isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid))
       );
       allow delete: if isAdmin() || (
         isAuthenticated() &&
@@ -210,7 +241,7 @@ service cloud.firestore {
         (!('unlockedBadges' in request.resource.data) || (request.resource.data.unlockedBadges is list && request.resource.data.unlockedBadges.size() <= 10)) &&
         (!('profileBadges' in request.resource.data) || (request.resource.data.profileBadges is list && request.resource.data.profileBadges.size() <= 10 && (!('unlockedBadges' in request.resource.data) || request.resource.data.profileBadges.hasOnly(request.resource.data.unlockedBadges))))
       );
-      allow delete: if isAdmin();
+      allow delete: if isOwner(userId) || isAdmin();
     }
 
     // ===============================================================
@@ -362,15 +393,27 @@ service cloud.firestore {
         request.resource.data.type in ['follow', 'like', 'reply', 'mention'] &&
         request.resource.data.read is bool &&
         (!('snippet' in request.resource.data) || (request.resource.data.snippet is string && request.resource.data.snippet.size() <= 300)) &&
+        (!('postSnippet' in request.resource.data) || (request.resource.data.postSnippet is string && request.resource.data.postSnippet.size() <= 300)) &&
         request.resource.data.createdAt is string &&
         request.resource.data.createdAt.size() <= 64;
       allow update: if isAdmin() || (
         isAuthenticated() &&
-        resource.data.recipientId == request.auth.uid &&
-        request.resource.data.recipientId == resource.data.recipientId &&
-        request.resource.data.actorId == resource.data.actorId &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']) &&
-        request.resource.data.read is bool
+        (
+          (
+            resource.data.recipientId == request.auth.uid &&
+            request.resource.data.recipientId == resource.data.recipientId &&
+            request.resource.data.actorId == resource.data.actorId &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']) &&
+            request.resource.data.read is bool
+          ) ||
+          (
+            resource.data.actorId == request.auth.uid &&
+            request.resource.data.actorId == request.auth.uid &&
+            request.resource.data.recipientId == resource.data.recipientId &&
+            request.resource.data.type in ['follow', 'like', 'reply', 'mention'] &&
+            request.resource.data.read is bool
+          )
+        )
       );
       allow delete: if isAdmin() || (
         isAuthenticated() &&

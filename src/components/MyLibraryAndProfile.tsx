@@ -28,6 +28,7 @@ import {
   Search,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   RefreshCw,
   Star,
   Crown,
@@ -55,7 +56,12 @@ import {
   isValidBadgeId,
 } from '../data/badges';
 import { downloadBookPdf } from '../utils/pdfUtils';
+import {
+  isAdminIdentity,
+  isReservedAdminUsername,
+} from '../utils/adminStealthUtils';
 import { CommunityPostCard, CreateReplyInput } from './CommunityView';
+import { ProfileHighlightSection } from './ProfileHighlightSection';
 import {
   DEFAULT_PROFILE_CUSTOMIZATION,
   getProfileBackgroundStyle,
@@ -260,6 +266,31 @@ export const MyLibraryView: React.FC<MyLibraryViewProps> = ({
   const [activeTab, setActiveTab] = useState<
     'lista' | 'lendo' | 'concluido' | 'favoritos' | 'reviews'
   >(initialTab);
+  const [expandedMobileBookId, setExpandedMobileBookId] = useState<string | null>(
+    null
+  );
+  const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
+  const filterMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
+
+  useEffect(() => {
+    if (!isFilterMenuOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        filterMenuRef.current &&
+        !filterMenuRef.current.contains(event.target as Node)
+      ) {
+        setIsFilterMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isFilterMenuOpen]);
 
   const isPremium = isUserPremium(userProfile);
   const maxProfileFavorites = getMaxProfileFavoriteBooks(userProfile);
@@ -358,34 +389,101 @@ export const MyLibraryView: React.FC<MyLibraryViewProps> = ({
           </div>
         </div>
 
-        {/* Navigation Tabs (Sem "Quero ler", deixando "Favoritos" + "✍️ Minhas Reviews") */}
-        <div className="flex flex-wrap items-center gap-2 mb-8">
-          {(
-            [
-              { id: 'lista', label: 'Minha Lista Completa' },
-              { id: 'lendo', label: `Lendo (${readingCount})` },
-              { id: 'concluido', label: `Concluídos (${completedCount})` },
-              { id: 'favoritos', label: `Favoritos (${favoritesCount})` },
-              {
-                id: 'reviews',
-                label: `Minhas Reviews (${myPublishedReviews.length})`,
-              },
-            ] as const
-          ).map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveTab(tab.id)}
-              className={`rounded-lg px-4 py-2.5 text-xs sm:text-sm font-semibold transition-all cursor-pointer whitespace-nowrap ${
-                activeTab === tab.id
-                  ? 'bg-[#2563EB] text-white shadow-lg'
-                  : 'bg-[#071426] text-blue-200/80 hover:text-white border border-blue-400/20'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+        {/* Navegação de Abas: No celular (md:hidden) um único botão de filtro; no PC (hidden md:flex) todos os botões como antes */}
+        {(() => {
+          const filterOptions = [
+            { id: 'lista', label: 'Minha Lista Completa' },
+            { id: 'lendo', label: `Lendo (${readingCount})` },
+            { id: 'concluido', label: `Concluídos (${completedCount})` },
+            { id: 'favoritos', label: `Favoritos (${favoritesCount})` },
+            {
+              id: 'reviews',
+              label: `Minhas Reviews (${myPublishedReviews.length})`,
+            },
+          ] as const;
+          const currentFilter =
+            filterOptions.find((t) => t.id === activeTab) || filterOptions[0];
+
+          return (
+            <>
+              {/* Versão Celular: Botão único com menu de filtro */}
+              <div
+                ref={filterMenuRef}
+                className="relative inline-block mb-6 z-20 md:hidden"
+              >
+                <button
+                  type="button"
+                  onClick={() => setIsFilterMenuOpen((prev) => !prev)}
+                  aria-expanded={isFilterMenuOpen}
+                  aria-haspopup="listbox"
+                  className="inline-flex items-center justify-between gap-3 rounded-xl bg-[#2563EB] hover:bg-[#3B82F6] text-white px-4 py-2.5 text-xs font-semibold shadow-lg transition-all cursor-pointer min-w-[220px]"
+                >
+                  <span>{currentFilter.label}</span>
+                  <ChevronDown
+                    className={`w-4 h-4 transition-transform duration-200 ${
+                      isFilterMenuOpen ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+
+                {isFilterMenuOpen && (
+                  <div
+                    role="listbox"
+                    className="absolute left-0 mt-2 w-64 rounded-xl bg-[#071426] border border-blue-400/30 shadow-2xl py-1.5 overflow-hidden"
+                  >
+                    {filterOptions.map((tab) => {
+                      const isSelected = activeTab === tab.id;
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          role="option"
+                          aria-selected={isSelected}
+                          onClick={() => {
+                            setActiveTab(tab.id);
+                            setExpandedMobileBookId(null);
+                            setIsFilterMenuOpen(false);
+                          }}
+                          className={`w-full flex items-center justify-between px-4 py-2.5 text-left text-xs font-semibold transition-colors cursor-pointer ${
+                            isSelected
+                              ? 'bg-[#2563EB]/25 text-white'
+                              : 'text-blue-200/80 hover:bg-blue-500/10 hover:text-white'
+                          }`}
+                        >
+                          <span>{tab.label}</span>
+                          {isSelected && (
+                            <Check className="w-4 h-4 text-[#60A5FA] flex-shrink-0" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Versão PC: Todos os botões visíveis lado a lado como antes */}
+              <div className="hidden md:flex flex-wrap items-center gap-2 mb-8">
+                {filterOptions.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => {
+                      setActiveTab(tab.id);
+                      setExpandedMobileBookId(null);
+                    }}
+                    className={`rounded-lg px-4 py-2.5 text-xs sm:text-sm font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                      activeTab === tab.id
+                        ? 'bg-[#2563EB] text-white shadow-lg'
+                        : 'bg-[#071426] text-blue-200/80 hover:text-white border border-blue-400/20'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          );
+        })()}
 
         {/* Library Items Grid (shown when activeTab !== 'reviews') */}
         {activeTab !== 'reviews' && (
@@ -398,155 +496,326 @@ export const MyLibraryView: React.FC<MyLibraryViewProps> = ({
                 </h3>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-                {displayedBooks.map((book) => {
-                  const item = userLibrary[book.id];
-                  return (
-                    <div
-                      key={book.id}
-                      className="flex gap-4 rounded-xl bg-[#071426] border border-blue-400/20 hover:border-[#60A5FA]/50 p-4 transition-all"
-                    >
-                      {/* Cover */}
-                      <div
-                        onClick={() => onSelectBook(book)}
-                        className="w-24 sm:w-28 flex-shrink-0 cursor-pointer"
-                      >
-                        <BookCover book={book} />
-                      </div>
+              <>
+                {/* Versão Celular (md:hidden): Apenas os quadrados das capas; ao clicar na capa exibe nome, autor, progresso etc., e somente o botão Continuar/Ler abre o livro */}
+                <div className="grid grid-cols-3 gap-3 md:hidden">
+                  {displayedBooks.map((book) => {
+                    const item = userLibrary[book.id];
+                    const isExpanded = expandedMobileBookId === book.id;
 
-                      {/* Book Details */}
-                      <div className="flex-1 min-w-0 flex flex-col justify-between">
-                        <div>
-                          <div className="flex items-start justify-between gap-2">
-                            {activeTab === 'lista' ? (
-                              <span
-                                className={`inline-flex items-center rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
-                                  item.status === 'concluido'
-                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                                    : item.status === 'lendo'
-                                    ? 'bg-blue-500/20 text-[#60A5FA] border border-blue-400/30'
-                                    : 'bg-blue-950 text-blue-100 border border-blue-400/20'
-                                }`}
-                              >
-                                {statusLabel[item.status]}
-                              </span>
+                    if (!isExpanded) {
+                      return (
+                        <button
+                          key={book.id}
+                          type="button"
+                          onClick={() => setExpandedMobileBookId(book.id)}
+                          aria-label={`Ver informações de ${book.titulo}`}
+                          className="block w-full text-left rounded-xl overflow-hidden focus:outline-none focus:ring-2 focus:ring-[#60A5FA] transition-transform active:scale-[0.98] cursor-pointer"
+                        >
+                          <BookCover book={book} />
+                        </button>
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={book.id}
+                        className="col-span-3 flex gap-3.5 rounded-xl bg-[#071426] border border-[#60A5FA]/50 p-3.5 transition-all shadow-lg"
+                      >
+                        {/* Capa no detalhe mobile: tocar nela apenas recolhe os detalhes (não leva ao livro) */}
+                        <div
+                          onClick={() => setExpandedMobileBookId(null)}
+                          className="w-24 flex-shrink-0 cursor-pointer"
+                          title="Toque para recolher detalhes"
+                        >
+                          <BookCover book={book} />
+                        </div>
+
+                        {/* Detalhes do Livro no Celular (sem link no título) */}
+                        <div className="flex-1 min-w-0 flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-start justify-between gap-2">
+                              {activeTab === 'lista' ? (
+                                <span
+                                  className={`inline-flex items-center rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                                    item.status === 'concluido'
+                                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                      : item.status === 'lendo'
+                                      ? 'bg-blue-500/20 text-[#60A5FA] border border-blue-400/30'
+                                      : 'bg-blue-950 text-blue-100 border border-blue-400/20'
+                                  }`}
+                                >
+                                  {statusLabel[item.status]}
+                                </span>
+                              ) : (
+                                <div />
+                              )}
+
+                              <div className="flex items-center gap-1">
+                                {activeTab === 'favoritos' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onRemoveFromList(book)}
+                                    title="Excluir livro dos Favoritos"
+                                    className="text-blue-300/60 hover:text-rose-400 transition-colors p-1 cursor-pointer"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedMobileBookId(null)}
+                                  aria-label="Fechar detalhes do livro"
+                                  className="text-blue-300/60 hover:text-white transition-colors p-1 cursor-pointer"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+
+                            <h3 className="font-display text-lg font-bold text-white truncate mt-1">
+                              {book.titulo}
+                            </h3>
+                            <p className="text-xs text-blue-200/70 truncate">
+                              {book.autor}
+                            </p>
+
+                            {/* Barra de Progresso */}
+                            <div className="mt-2.5">
+                              <div className="flex items-center justify-between text-[11px] font-mono-num text-blue-200/75 mb-1">
+                                <span>
+                                  Pág. {item.paginaAtual} de {book.paginas}
+                                </span>
+                                <span className="text-[#60A5FA] font-bold">
+                                  {item.progresso}%
+                                </span>
+                              </div>
+                              <div className="h-1.5 w-full rounded-full bg-blue-950 overflow-hidden">
+                                <div
+                                  className="h-full bg-[#3B82F6]"
+                                  style={{ width: `${item.progresso}%` }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Controles Inferiores — Estrela + Botão Continuar/Ler (única ação que abre o livro) */}
+                          <div className="mt-3 pt-2.5 border-t border-blue-400/15 flex flex-wrap items-center justify-between gap-2">
+                            {(item.inMyList ||
+                              item.isFavorite ||
+                              item.status === 'quero_ler') &&
+                            onToggleProfileFavoriteBook ? (
+                              (() => {
+                                const isShownOnProfile =
+                                  validSelectedProfileIds.includes(book.id);
+                                const isLimitReached =
+                                  !isShownOnProfile &&
+                                  validSelectedProfileIds.length >=
+                                    maxProfileFavorites;
+                                return (
+                                  <button
+                                    type="button"
+                                    disabled={isLimitReached && isPremium}
+                                    onClick={() => {
+                                      if (isLimitReached && !isPremium) {
+                                        onOpenPremiumModal?.();
+                                        return;
+                                      }
+                                      onToggleProfileFavoriteBook(book);
+                                    }}
+                                    aria-label="Destacar no perfil"
+                                    className={`inline-flex items-center justify-center rounded-lg p-2 border transition-all ${
+                                      isShownOnProfile
+                                        ? 'bg-amber-500/20 border-amber-400/50 text-amber-400 cursor-pointer'
+                                        : isLimitReached
+                                        ? isPremium
+                                          ? 'bg-[#040D1A]/50 border-blue-400/15 text-blue-200/40 opacity-45 cursor-not-allowed'
+                                          : 'bg-[#040D1A]/80 hover:bg-amber-500/15 border-amber-400/25 text-amber-300/75 hover:text-amber-300 cursor-pointer'
+                                        : 'bg-[#040D1A] hover:bg-blue-500/15 border-blue-400/30 text-blue-200 hover:text-amber-400 cursor-pointer'
+                                    }`}
+                                  >
+                                    <Star
+                                      className={`w-4 h-4 ${
+                                        isShownOnProfile ? 'fill-amber-400' : ''
+                                      }`}
+                                    />
+                                  </button>
+                                );
+                              })()
                             ) : (
                               <div />
                             )}
 
-                            {/* Exclusão disponível apenas na aba de Favoritos */}
-                            {activeTab === 'favoritos' && (
-                              <button
-                                type="button"
-                                onClick={() => onRemoveFromList(book)}
-                                title="Excluir livro dos Favoritos"
-                                className="text-blue-300/60 hover:text-rose-400 transition-colors p-1 cursor-pointer"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            )}
-                          </div>
-
-                          <h3
-                            onClick={() => onSelectBook(book)}
-                            className="font-display text-xl font-bold text-white hover:text-[#60A5FA] cursor-pointer truncate mt-1"
-                          >
-                            {book.titulo}
-                          </h3>
-                          <p className="text-xs text-blue-200/70 truncate">{book.autor}</p>
-
-                          {/* Progress Bar */}
-                          <div className="mt-3">
-                            <div className="flex items-center justify-between text-[11px] font-mono-num text-blue-200/75 mb-1">
+                            <button
+                              type="button"
+                              onClick={() => onReadBook(book)}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-[#2563EB] hover:bg-[#3B82F6] px-4 py-1.5 text-xs font-bold text-white transition-colors cursor-pointer"
+                            >
+                              <Play className="w-3.5 h-3.5 fill-current" />
                               <span>
-                                Pág. {item.paginaAtual} de {book.paginas}
+                                {item.progresso > 0 && item.progresso < 100
+                                  ? 'Continuar'
+                                  : 'Ler'}
                               </span>
-                              <span className="text-[#60A5FA] font-bold">
-                                {item.progresso}%
-                              </span>
-                            </div>
-                            <div className="h-1.5 w-full rounded-full bg-blue-950 overflow-hidden">
-                              <div
-                                className="h-full bg-[#3B82F6]"
-                                style={{ width: `${item.progresso}%` }}
-                              />
-                            </div>
+                            </button>
                           </div>
-                        </div>
-
-                        {/* Bottom Controls — Estrela (Mostrar no perfil até 3 ou 5 no Premium) + Ler */}
-                        <div className="mt-4 pt-3 border-t border-blue-400/15 flex flex-wrap items-center justify-between gap-2">
-                          {(item.inMyList ||
-                            item.isFavorite ||
-                            item.status === 'quero_ler') &&
-                          onToggleProfileFavoriteBook ? (
-                            (() => {
-                              const isShownOnProfile =
-                                validSelectedProfileIds.includes(book.id);
-                              const isLimitReached =
-                                !isShownOnProfile &&
-                                validSelectedProfileIds.length >= maxProfileFavorites;
-                              return (
-                                <button
-                                  type="button"
-                                  disabled={isLimitReached && isPremium}
-                                  onClick={() => {
-                                    if (isLimitReached && !isPremium) {
-                                      onOpenPremiumModal?.();
-                                      return;
-                                    }
-                                    onToggleProfileFavoriteBook(book);
-                                  }}
-                                  title={
-                                    isLimitReached
-                                      ? isPremium
-                                        ? `Você já escolheu ${maxProfileFavorites} livros para o perfil. Desmarque um para selecionar este.`
-                                        : 'Limite de 3 livros no plano gratuito atingido. Com LIVROFLIX Premium você pode exibir até 5 livros no perfil!'
-                                      : isShownOnProfile
-                                      ? 'Desmarcar exibição no perfil (continua na Minha lista)'
-                                      : `Destacar este livro no perfil (${validSelectedProfileIds.length}/${maxProfileFavorites})`
-                                  }
-                                  aria-label="Destacar no perfil"
-                                  className={`inline-flex items-center justify-center rounded-lg p-2 border transition-all ${
-                                    isShownOnProfile
-                                      ? 'bg-amber-500/20 border-amber-400/50 text-amber-400 cursor-pointer'
-                                      : isLimitReached
-                                      ? isPremium
-                                        ? 'bg-[#040D1A]/50 border-blue-400/15 text-blue-200/40 opacity-45 cursor-not-allowed'
-                                        : 'bg-[#040D1A]/80 hover:bg-amber-500/15 border-amber-400/25 text-amber-300/75 hover:text-amber-300 cursor-pointer'
-                                      : 'bg-[#040D1A] hover:bg-blue-500/15 border-blue-400/30 text-blue-200 hover:text-amber-400 cursor-pointer'
-                                  }`}
-                                >
-                                  <Star
-                                    className={`w-4 h-4 ${
-                                      isShownOnProfile ? 'fill-amber-400' : ''
-                                    }`}
-                                  />
-                                </button>
-                              );
-                            })()
-                          ) : (
-                            <div />
-                          )}
-
-                          <button
-                            type="button"
-                            onClick={() => onReadBook(book)}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-[#2563EB] hover:bg-[#3B82F6] px-4 py-1.5 text-xs font-bold text-white transition-colors cursor-pointer"
-                          >
-                            <Play className="w-3.5 h-3.5 fill-current" />
-                            <span>
-                              {item.progresso > 0 && item.progresso < 100
-                                ? 'Continuar'
-                                : 'Ler'}
-                            </span>
-                          </button>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+
+                {/* Versão Desktop (hidden md:grid) */}
+                <div className="hidden md:grid md:grid-cols-2 xl:grid-cols-3 gap-5">
+                  {displayedBooks.map((book) => {
+                    const item = userLibrary[book.id];
+                    return (
+                      <div
+                        key={book.id}
+                        className="flex gap-4 rounded-xl bg-[#071426] border border-blue-400/20 hover:border-[#60A5FA]/50 p-4 transition-all"
+                      >
+                        {/* Cover */}
+                        <div
+                          onClick={() => onSelectBook(book)}
+                          className="w-24 sm:w-28 flex-shrink-0 cursor-pointer"
+                        >
+                          <BookCover book={book} />
+                        </div>
+
+                        {/* Book Details */}
+                        <div className="flex-1 min-w-0 flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-start justify-between gap-2">
+                              {activeTab === 'lista' ? (
+                                <span
+                                  className={`inline-flex items-center rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                                    item.status === 'concluido'
+                                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                      : item.status === 'lendo'
+                                      ? 'bg-blue-500/20 text-[#60A5FA] border border-blue-400/30'
+                                      : 'bg-blue-950 text-blue-100 border border-blue-400/20'
+                                  }`}
+                                >
+                                  {statusLabel[item.status]}
+                                </span>
+                              ) : (
+                                <div />
+                              )}
+
+                              {/* Exclusão disponível apenas na aba de Favoritos */}
+                              {activeTab === 'favoritos' && (
+                                <button
+                                  type="button"
+                                  onClick={() => onRemoveFromList(book)}
+                                  title="Excluir livro dos Favoritos"
+                                  className="text-blue-300/60 hover:text-rose-400 transition-colors p-1 cursor-pointer"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
+
+                            <h3
+                              onClick={() => onSelectBook(book)}
+                              className="font-display text-xl font-bold text-white hover:text-[#60A5FA] cursor-pointer truncate mt-1"
+                            >
+                              {book.titulo}
+                            </h3>
+                            <p className="text-xs text-blue-200/70 truncate">{book.autor}</p>
+
+                            {/* Progress Bar */}
+                            <div className="mt-3">
+                              <div className="flex items-center justify-between text-[11px] font-mono-num text-blue-200/75 mb-1">
+                                <span>
+                                  Pág. {item.paginaAtual} de {book.paginas}
+                                </span>
+                                <span className="text-[#60A5FA] font-bold">
+                                  {item.progresso}%
+                                </span>
+                              </div>
+                              <div className="h-1.5 w-full rounded-full bg-blue-950 overflow-hidden">
+                                <div
+                                  className="h-full bg-[#3B82F6]"
+                                  style={{ width: `${item.progresso}%` }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Bottom Controls — Estrela (Mostrar no perfil até 3 ou 5 no Premium) + Ler */}
+                          <div className="mt-4 pt-3 border-t border-blue-400/15 flex flex-wrap items-center justify-between gap-2">
+                            {(item.inMyList ||
+                              item.isFavorite ||
+                              item.status === 'quero_ler') &&
+                            onToggleProfileFavoriteBook ? (
+                              (() => {
+                                const isShownOnProfile =
+                                  validSelectedProfileIds.includes(book.id);
+                                const isLimitReached =
+                                  !isShownOnProfile &&
+                                  validSelectedProfileIds.length >= maxProfileFavorites;
+                                return (
+                                  <button
+                                    type="button"
+                                    disabled={isLimitReached && isPremium}
+                                    onClick={() => {
+                                      if (isLimitReached && !isPremium) {
+                                        onOpenPremiumModal?.();
+                                        return;
+                                      }
+                                      onToggleProfileFavoriteBook(book);
+                                    }}
+                                    title={
+                                      isLimitReached
+                                        ? isPremium
+                                          ? `Você já escolheu ${maxProfileFavorites} livros para o perfil. Desmarque um para selecionar este.`
+                                          : 'Limite de 3 livros no plano gratuito atingido. Com LIVROFLIX Premium você pode exibir até 5 livros no perfil!'
+                                        : isShownOnProfile
+                                        ? 'Desmarcar exibição no perfil (continua na Minha lista)'
+                                        : `Destacar este livro no perfil (${validSelectedProfileIds.length}/${maxProfileFavorites})`
+                                    }
+                                    aria-label="Destacar no perfil"
+                                    className={`inline-flex items-center justify-center rounded-lg p-2 border transition-all ${
+                                      isShownOnProfile
+                                        ? 'bg-amber-500/20 border-amber-400/50 text-amber-400 cursor-pointer'
+                                        : isLimitReached
+                                        ? isPremium
+                                          ? 'bg-[#040D1A]/50 border-blue-400/15 text-blue-200/40 opacity-45 cursor-not-allowed'
+                                          : 'bg-[#040D1A]/80 hover:bg-amber-500/15 border-amber-400/25 text-amber-300/75 hover:text-amber-300 cursor-pointer'
+                                        : 'bg-[#040D1A] hover:bg-blue-500/15 border-blue-400/30 text-blue-200 hover:text-amber-400 cursor-pointer'
+                                    }`}
+                                  >
+                                    <Star
+                                      className={`w-4 h-4 ${
+                                        isShownOnProfile ? 'fill-amber-400' : ''
+                                      }`}
+                                    />
+                                  </button>
+                                );
+                              })()
+                            ) : (
+                              <div />
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => onReadBook(book)}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-[#2563EB] hover:bg-[#3B82F6] px-4 py-1.5 text-xs font-bold text-white transition-colors cursor-pointer"
+                            >
+                              <Play className="w-3.5 h-3.5 fill-current" />
+                              <span>
+                                {item.progresso > 0 && item.progresso < 100
+                                  ? 'Continuar'
+                                  : 'Ler'}
+                              </span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
             )}
           </>
         )}
@@ -1069,13 +1338,16 @@ export function generateDefaultUsername(
     .replace(/^\.+|\.+$/g, '')
     .replace(/\.{2,}/g, '.');
 
-  if (cleaned.length >= USERNAME_MIN_LENGTH) {
-    return cleaned.slice(0, 24);
-  }
   const uidSuffix = (profile.uid || '100')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '')
     .slice(-4);
+  if (
+    cleaned.length >= USERNAME_MIN_LENGTH &&
+    (!isReservedAdminUsername(cleaned) || isAdminIdentity(profile))
+  ) {
+    return cleaned.slice(0, 24);
+  }
   return `leitor_${uidSuffix || 'lf'}`;
 }
 
@@ -1152,6 +1424,10 @@ interface ProfileViewProps {
   onOpenAdmin: () => void;
   onNavigateCommunity?: () => void;
   onUpdateOwnProfile?: (input: ProfileUpdateInput) => Promise<void>;
+  onCheckUsernameAvailability?: (
+    username: string,
+    excludeUid?: string
+  ) => Promise<{ available: boolean; normalized: string; reason?: string }>;
   onSaveProfileCustomization?: (
     customization: ProfileCustomization
   ) => Promise<void>;
@@ -1163,6 +1439,7 @@ interface ProfileViewProps {
   onToggleCommunityFollow?: (targetUserId: string) => Promise<void>;
   onOpenPremiumModal?: () => void;
   platformSettings?: PlatformSettings;
+  highlightGoogleLoginButton?: boolean;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
@@ -1183,6 +1460,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onOpenAdmin,
   onNavigateCommunity,
   onUpdateOwnProfile,
+  onCheckUsernameAvailability,
   onSaveProfileCustomization,
   onToggleProfileBadge,
   onToggleCommunityLike,
@@ -1192,6 +1470,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onToggleCommunityFollow,
   onOpenPremiumModal,
   platformSettings,
+  highlightGoogleLoginButton = false,
 }) => {
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -1222,6 +1501,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [isProcessingPhoto, setIsProcessingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+  const [usernameCheckState, setUsernameCheckState] = useState<{
+    status: 'idle' | 'checking' | 'available' | 'taken';
+    reason?: string;
+  }>({ status: 'idle' });
   const [profileSaveFeedback, setProfileSaveFeedback] = useState<string | null>(
     null
   );
@@ -1263,6 +1546,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     setActiveFavoriteSlotIndex(null);
     setFavoriteBookSearchQuery('');
     setEditError(null);
+    setUsernameCheckState({ status: 'idle' });
     setDraftCustomization({
       ...(userProfile.profileCustomization || DEFAULT_PROFILE_CUSTOMIZATION),
       usernameColor:
@@ -1416,6 +1700,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       return;
     }
 
+    if (!isAdmin && isReservedAdminUsername(usernameCheck.normalized)) {
+      const msg = `O nome de usuário @${usernameCheck.normalized} não está disponível.`;
+      setUsernameCheckState({ status: 'taken', reason: msg });
+      setEditError(msg);
+      return;
+    }
+
     const currentNormalizedUsername = (
       userProfile.username || generateDefaultUsername(userProfile)
     )
@@ -1448,6 +1739,22 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
     setIsSavingProfile(true);
     try {
+      if (onCheckUsernameAvailability) {
+        const avail = await onCheckUsernameAvailability(
+          usernameCheck.normalized,
+          userProfile.uid
+        );
+        if (!avail.available) {
+          const msg =
+            avail.reason ||
+            `O nome de usuário @${usernameCheck.normalized} já está sendo usado por outro leitor.`;
+          setUsernameCheckState({ status: 'taken', reason: msg });
+          setEditError(msg);
+          setIsSavingProfile(false);
+          return;
+        }
+      }
+
       await onUpdateOwnProfile({
         displayName: usernameCheck.normalized,
         username: usernameCheck.normalized,
@@ -1630,6 +1937,151 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
   const liveUsernameValidation = validateUsernameFormat(editUsername);
   const usernameChangeStatus = getUsernameChangeStatus(userProfile);
+
+  const currentNormalizedUsername = (
+    userProfile?.username ||
+    (userProfile ? generateDefaultUsername(userProfile) : '')
+  )
+    .replace(/^@+/, '')
+    .trim()
+    .toLowerCase();
+
+  // Verificação instantânea local (0ms) contra perfis públicos, publicações, respostas e localStorage
+  const isUsernameTakenLocally = React.useMemo(() => {
+    if (!liveUsernameValidation.valid || !userProfile?.uid) return false;
+    const candidate = liveUsernameValidation.normalized;
+    const myUid = userProfile.uid;
+
+    for (const pub of Object.values(publicProfilesMap)) {
+      if (!pub || !pub.uid || pub.uid === myUid) continue;
+      const pubName = (pub.username || '')
+        .replace(/^@+/, '')
+        .trim()
+        .toLowerCase();
+      if (pubName && pubName === candidate) return true;
+    }
+
+    for (const p of communityPosts) {
+      if (!p.authorId || p.authorId === myUid) continue;
+      const uName = (
+        publicProfilesMap[p.authorId]?.username ||
+        p.authorUsername ||
+        ''
+      )
+        .replace(/^@+/, '')
+        .trim()
+        .toLowerCase();
+      if (uName && uName === candidate) return true;
+    }
+
+    for (const r of communityReplies) {
+      if (!r.authorId || r.authorId === myUid) continue;
+      const uName = (
+        publicProfilesMap[r.authorId]?.username ||
+        r.authorUsername ||
+        ''
+      )
+        .replace(/^@+/, '')
+        .trim()
+        .toLowerCase();
+      if (uName && uName === candidate) return true;
+    }
+
+    try {
+      const rawReg = localStorage.getItem('livroflix_usernames_registry_v1');
+      if (rawReg) {
+        const parsed = JSON.parse(rawReg) as Record<string, string>;
+        if (parsed[candidate] && parsed[candidate] !== myUid) {
+          return true;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    return false;
+  }, [
+    liveUsernameValidation.valid,
+    liveUsernameValidation.normalized,
+    userProfile?.uid,
+    publicProfilesMap,
+    communityPosts,
+    communityReplies,
+  ]);
+
+  // Verificação contínua em tempo real (memória + Firestore) sempre que o usuário digitar um @username
+  useEffect(() => {
+    if (!isSettingsOpen && !isEditModalOpen) return;
+    if (!liveUsernameValidation.valid || !userProfile?.uid) {
+      setUsernameCheckState({ status: 'idle' });
+      return;
+    }
+
+    const candidate = liveUsernameValidation.normalized;
+
+    if (isUsernameTakenLocally) {
+      setUsernameCheckState({
+        status: 'taken',
+        reason: `O nome de usuário @${candidate} já existe e está em uso por outro leitor.`,
+      });
+      return;
+    }
+
+    if (candidate === currentNormalizedUsername) {
+      setUsernameCheckState({ status: 'idle' });
+      return;
+    }
+
+    if (!onCheckUsernameAvailability) {
+      setUsernameCheckState({ status: 'available' });
+      return;
+    }
+
+    let cancelled = false;
+    setUsernameCheckState({ status: 'checking' });
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await onCheckUsernameAvailability(
+          candidate,
+          userProfile.uid
+        );
+        if (cancelled) return;
+        if (!res.available) {
+          setUsernameCheckState({
+            status: 'taken',
+            reason:
+              res.reason ||
+              `O nome de usuário @${candidate} já existe e está em uso por outro leitor.`,
+          });
+        } else {
+          setUsernameCheckState({ status: 'available' });
+        }
+      } catch {
+        if (!cancelled) {
+          setUsernameCheckState({ status: 'idle' });
+        }
+      }
+    }, 220);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    editUsername,
+    isSettingsOpen,
+    isEditModalOpen,
+    liveUsernameValidation.valid,
+    liveUsernameValidation.normalized,
+    isUsernameTakenLocally,
+    currentNormalizedUsername,
+    userProfile?.uid,
+    onCheckUsernameAvailability,
+  ]);
+
+  const isUsernameBlocked =
+    isUsernameTakenLocally || usernameCheckState.status === 'taken';
 
   // ABA DEDICADA DE CONFIGURAÇÕES (Editar perfil, Personalizar perfil e Sair da conta)
   if (isSettingsOpen && isAuthenticated && userProfile) {
@@ -1842,20 +2294,61 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                       disabled={!usernameChangeStatus.canChange}
                       maxLength={USERNAME_MAX_LENGTH}
                       value={editUsername}
-                      onChange={(e) =>
-                        setEditUsername(sanitizeUsernameInput(e.target.value))
-                      }
+                      onChange={(e) => {
+                        setEditError(null);
+                        setEditUsername(sanitizeUsernameInput(e.target.value));
+                      }}
                       placeholder="nomeusuario"
-                      className={`w-full rounded-xl bg-[#040D1A] border pl-9 pr-4 py-3 text-sm text-white placeholder-blue-300/35 focus:outline-none transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+                      className={`w-full rounded-xl bg-[#040D1A] border pl-9 pr-10 py-3 text-sm text-white placeholder-blue-300/35 focus:outline-none transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
                         editUsername.length > 0 && !liveUsernameValidation.valid
                           ? 'border-amber-400/60 focus:border-amber-400'
+                          : isUsernameBlocked
+                          ? 'border-rose-500/80 focus:border-rose-500'
+                          : usernameCheckState.status === 'available'
+                          ? 'border-emerald-400/60 focus:border-emerald-400'
                           : 'border-blue-400/25 focus:border-[#60A5FA]'
                       }`}
                     />
+                    {editUsername.length > 0 && liveUsernameValidation.valid && (
+                      <span className="absolute right-3.5 flex items-center pointer-events-none">
+                        {usernameCheckState.status === 'checking' && (
+                          <Loader2 className="w-4 h-4 text-[#60A5FA] animate-spin" />
+                        )}
+                        {isUsernameBlocked && (
+                          <AlertCircle className="w-4 h-4 text-rose-400" />
+                        )}
+                        {!isUsernameBlocked &&
+                          usernameCheckState.status === 'available' && (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          )}
+                      </span>
+                    )}
                   </div>
                   {editUsername.length > 0 && !liveUsernameValidation.valid ? (
                     <p className="mt-1.5 text-xs text-amber-300">
                       {liveUsernameValidation.error}
+                    </p>
+                  ) : isUsernameBlocked ? (
+                    <p className="mt-1.5 text-xs font-semibold text-rose-400 flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        {usernameCheckState.reason ||
+                          `O nome de usuário @${liveUsernameValidation.normalized} já existe e está em uso por outro leitor.`}
+                      </span>
+                    </p>
+                  ) : usernameCheckState.status === 'checking' ? (
+                    <p className="mt-1.5 text-xs text-blue-300/80 flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-[#60A5FA] shrink-0" />
+                      <span>
+                        Verificando disponibilidade de @{liveUsernameValidation.normalized}...
+                      </span>
+                    </p>
+                  ) : usernameCheckState.status === 'available' ? (
+                    <p className="mt-1.5 text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
+                      <Check className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        @{liveUsernameValidation.normalized} está disponível!
+                      </span>
                     </p>
                   ) : (
                     <p className="mt-1.5 text-xs text-blue-300/60">
@@ -1929,8 +2422,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
                   <button
                     type="submit"
-                    disabled={isSavingProfile || isProcessingPhoto}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-60 px-6 py-2.5 text-xs sm:text-sm font-bold text-white shadow-lg transition-all cursor-pointer"
+                    disabled={
+                      isSavingProfile ||
+                      isProcessingPhoto ||
+                      !liveUsernameValidation.valid ||
+                      isUsernameBlocked ||
+                      usernameCheckState.status === 'checking'
+                    }
+                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-60 disabled:cursor-not-allowed px-6 py-2.5 text-xs sm:text-sm font-bold text-white shadow-lg transition-all cursor-pointer"
                   >
                     {isSavingProfile ? (
                       <>
@@ -2145,7 +2644,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                       type="button"
                       disabled={isSigningIn}
                       onClick={handleGoogleLoginClick}
-                      className="inline-flex items-center gap-2 rounded-xl bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-60 px-5 py-3 text-sm font-bold text-white shadow-lg transition-all cursor-pointer"
+                      className={`inline-flex items-center gap-2 rounded-xl bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-60 px-5 py-3 text-sm font-bold text-white transition-all cursor-pointer ${
+                        highlightGoogleLoginButton
+                          ? 'ring-2 ring-[#60A5FA] shadow-[0_0_28px_rgba(96,165,250,0.95),0_0_55px_rgba(37,99,235,0.75)] animate-pulse scale-[1.03]'
+                          : 'shadow-lg'
+                      }`}
                     >
                       <LogIn className="w-4 h-4" />
                       <span>
@@ -2162,6 +2665,15 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   {displayBio}
                 </p>
               ) : null}
+
+              {/* Destaque único do perfil (estilo Instagram) */}
+              {userProfile?.uid && (
+                <ProfileHighlightSection
+                  userId={userProfile.uid}
+                  isOwner={isAuthenticated && Boolean(userProfile)}
+                  align="center-md-left"
+                />
+              )}
 
               {/* Social Summary Bar: ONLY publicações, seguidores, seguindo */}
               <div className="mt-4 pt-4 border-t border-blue-400/15 flex flex-wrap items-center justify-center md:justify-start gap-x-6 gap-y-2 text-xs text-blue-200/75">
@@ -2352,20 +2864,61 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                       disabled={!usernameChangeStatus.canChange}
                       maxLength={USERNAME_MAX_LENGTH}
                       value={editUsername}
-                      onChange={(e) =>
-                        setEditUsername(sanitizeUsernameInput(e.target.value))
-                      }
+                      onChange={(e) => {
+                        setEditError(null);
+                        setEditUsername(sanitizeUsernameInput(e.target.value));
+                      }}
                       placeholder="nomeusuario"
-                      className={`w-full rounded-xl bg-[#040D1A] border pl-9 pr-4 py-3 text-sm text-white placeholder-blue-300/35 focus:outline-none transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+                      className={`w-full rounded-xl bg-[#040D1A] border pl-9 pr-10 py-3 text-sm text-white placeholder-blue-300/35 focus:outline-none transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
                         editUsername.length > 0 && !liveUsernameValidation.valid
                           ? 'border-amber-400/60 focus:border-amber-400'
+                          : isUsernameBlocked
+                          ? 'border-rose-500/80 focus:border-rose-500'
+                          : usernameCheckState.status === 'available'
+                          ? 'border-emerald-400/60 focus:border-emerald-400'
                           : 'border-blue-400/25 focus:border-[#60A5FA]'
                       }`}
                     />
+                    {editUsername.length > 0 && liveUsernameValidation.valid && (
+                      <span className="absolute right-3.5 flex items-center pointer-events-none">
+                        {usernameCheckState.status === 'checking' && (
+                          <Loader2 className="w-4 h-4 text-[#60A5FA] animate-spin" />
+                        )}
+                        {isUsernameBlocked && (
+                          <AlertCircle className="w-4 h-4 text-rose-400" />
+                        )}
+                        {!isUsernameBlocked &&
+                          usernameCheckState.status === 'available' && (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          )}
+                      </span>
+                    )}
                   </div>
                   {editUsername.length > 0 && !liveUsernameValidation.valid ? (
                     <p className="mt-1.5 text-[11px] text-amber-300">
                       {liveUsernameValidation.error}
+                    </p>
+                  ) : isUsernameBlocked ? (
+                    <p className="mt-1.5 text-[11px] font-semibold text-rose-400 flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        {usernameCheckState.reason ||
+                          `O nome de usuário @${liveUsernameValidation.normalized} já existe e está em uso por outro leitor.`}
+                      </span>
+                    </p>
+                  ) : usernameCheckState.status === 'checking' ? (
+                    <p className="mt-1.5 text-[11px] text-blue-300/80 flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-[#60A5FA] shrink-0" />
+                      <span>
+                        Verificando disponibilidade de @{liveUsernameValidation.normalized}...
+                      </span>
+                    </p>
+                  ) : usernameCheckState.status === 'available' ? (
+                    <p className="mt-1.5 text-[11px] font-semibold text-emerald-400 flex items-center gap-1.5">
+                      <Check className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        @{liveUsernameValidation.normalized} está disponível!
+                      </span>
                     </p>
                   ) : (
                     <p className="mt-1.5 text-[11px] text-blue-300/60">
@@ -2436,8 +2989,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
                   <button
                     type="submit"
-                    disabled={isSavingProfile || isProcessingPhoto}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-60 px-6 py-2.5 text-xs sm:text-sm font-bold text-white shadow-lg transition-all cursor-pointer"
+                    disabled={
+                      isSavingProfile ||
+                      isProcessingPhoto ||
+                      !liveUsernameValidation.valid ||
+                      isUsernameBlocked ||
+                      usernameCheckState.status === 'checking'
+                    }
+                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-60 disabled:cursor-not-allowed px-6 py-2.5 text-xs sm:text-sm font-bold text-white shadow-lg transition-all cursor-pointer"
                   >
                     {isSavingProfile ? (
                       <>
@@ -2499,8 +3058,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </div>
         </div>
 
-        {/* Achievements */}
-        {platformSettings?.showProfileAchievements !== false && (
+        {/* Achievements — Oculto temporariamente em todos os dispositivos */}
+        {false && platformSettings?.showProfileAchievements !== false && (
           <div className="rounded-2xl bg-[#071426] border border-blue-400/20 p-6 sm:p-8">
           <div className="flex items-center justify-between mb-6">
             <div>
@@ -2582,7 +3141,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                           : 'bg-[#040D1A]/60 border-blue-400/10 opacity-75'
                       }`}
                     >
-                      <div className="flex items-start gap-4">
+                      <div className="flex items-center gap-4">
                         <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-blue-950/70 text-2xl">
                           {ach.icon}
                         </div>
@@ -2595,15 +3154,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                               {ach.progressText}
                             </span>
                           </div>
-                          <p className="text-xs text-blue-200/75 mt-1">
-                            {ach.description}
-                          </p>
-                          {ach.unlocked && (
-                            <span className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400">
-                              <Check className="w-3.5 h-3.5" />
-                              <span>Conquista concluída</span>
-                            </span>
-                          )}
                         </div>
                       </div>
 
@@ -2624,7 +3174,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                             />
                             <div className="min-w-0">
                               <p className="text-xs font-bold text-white truncate">
-                                🏅 Recompensa: Selo {rewardBadge.name}
+                                Selo {rewardBadge.name}
                               </p>
                               <p
                                 className={`text-[11px] ${
@@ -2635,7 +3185,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                               >
                                 {ach.unlocked
                                   ? 'Selo recebido'
-                                  : 'Selo bloqueado'}
+                                  : 'Bloqueado'}
                               </p>
                             </div>
                           </div>

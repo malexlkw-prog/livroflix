@@ -3552,14 +3552,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <button
                             key={preset.id}
                             type="button"
-                            onClick={() => setPreviewUsernameColor(preset.hex)}
+                            onClick={() => setPreviewUsernameColor(preset.color)}
                             title={preset.label}
                             className={`h-6 w-6 rounded-full border transition-transform cursor-pointer ${
-                              previewUsernameColor === preset.hex
+                              previewUsernameColor === preset.color
                                 ? 'scale-125 ring-2 ring-white border-white'
                                 : 'border-white/25 hover:scale-110'
                             }`}
-                            style={{ backgroundColor: preset.hex }}
+                            style={{ backgroundColor: preset.color }}
                           />
                         ))}
                       </div>
@@ -3678,7 +3678,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     unlocked: true,
                     hasBadge: true,
                     badgeId: previewAnimationBadgeId,
-                  } as EvaluatedAchievement
+                  } as unknown as EvaluatedAchievement
                 }
                 isDisplayedOnProfile={previewBadgeIds.includes(
                   previewAnimationBadgeId

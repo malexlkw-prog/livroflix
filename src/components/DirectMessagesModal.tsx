@@ -35,6 +35,11 @@ import {
   getEffectiveUsernameColor,
   isUserPremium,
 } from '../utils/premiumUtils';
+import {
+  isAdminConversation,
+  isAdminIdentity,
+  isAdminUid,
+} from '../utils/adminStealthUtils';
 
 export const DM_MAX_LENGTH = 1000;
 
@@ -138,6 +143,7 @@ export interface DirectMessagesModalProps {
   onClose: () => void;
   currentUserProfile: UserProfile | null;
   isAuthenticated: boolean;
+  isAdmin?: boolean;
   conversations: DirectConversation[];
   publicProfilesMap: Record<string, PublicProfile>;
   follows: CommunityFollow[];
@@ -152,6 +158,7 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
   onClose,
   currentUserProfile,
   isAuthenticated,
+  isAdmin = false,
   conversations,
   publicProfilesMap,
   follows,
@@ -179,13 +186,30 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
   // Sync initialRecipientId when opening from a user's public profile ("Mensagem")
   useEffect(() => {
     if (isOpen && initialRecipientId && initialRecipientId !== currentUserId) {
+      if (
+        !isAdmin &&
+        (isAdminUid(initialRecipientId, publicProfilesMap) ||
+          isAdminIdentity(publicProfilesMap[initialRecipientId]))
+      ) {
+        if (onClearInitialRecipient) {
+          onClearInitialRecipient();
+        }
+        return;
+      }
       setSelectedOtherUserId(initialRecipientId);
       setSendError(null);
       if (onClearInitialRecipient) {
         onClearInitialRecipient();
       }
     }
-  }, [isOpen, initialRecipientId, currentUserId, onClearInitialRecipient]);
+  }, [
+    isOpen,
+    initialRecipientId,
+    currentUserId,
+    onClearInitialRecipient,
+    isAdmin,
+    publicProfilesMap,
+  ]);
 
   // Follow relationships for currentUserId
   const myFollowingIds = useMemo(() => {
@@ -251,14 +275,15 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
         (c) =>
           Array.isArray(c.participants) &&
           c.participants.includes(currentUserId) &&
-          c.participants.length === 2
+          c.participants.length === 2 &&
+          (isAdmin || !isAdminConversation(c, publicProfilesMap))
       )
       .sort((a, b) =>
         (b.lastMessageAt || b.updatedAt || '').localeCompare(
           a.lastMessageAt || a.updatedAt || ''
         )
       );
-  }, [conversations, currentUserId]);
+  }, [conversations, currentUserId, isAdmin, publicProfilesMap]);
 
   // Filter conversations by search query
   const filteredConversations = useMemo(() => {
@@ -296,8 +321,16 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
 
     myFollowingIds.forEach((uid) => {
       if (!uid || uid === currentUserId) return;
+      if (
+        !isAdmin &&
+        (isAdminUid(uid, publicProfilesMap) ||
+          isAdminIdentity(publicProfilesMap[uid]))
+      ) {
+        return;
+      }
       if (!q && existingOtherUids.has(uid)) return;
       const resolved = resolveParticipantProfile(uid);
+      if (!isAdmin && isAdminIdentity(resolved)) return;
       if (
         !q ||
         resolved.displayName.toLowerCase().includes(q) ||

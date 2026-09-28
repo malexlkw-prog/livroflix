@@ -6,6 +6,7 @@ import {
   ChevronDown,
   Crown,
   MessageCircle,
+  Bell,
 } from 'lucide-react';
 import { ActiveView, PlatformSettings, UserProfile } from '../types';
 import { LivroflixLogo } from './LivroflixLogo';
@@ -26,6 +27,7 @@ interface HeaderProps {
   myListCount: number;
   unreadCommunityCount?: number;
   unreadMessagesCount?: number;
+  onOpenNotifications?: () => void;
   onOpenMessages?: () => void;
   categoriesList?: string[];
   platformSettings?: PlatformSettings;
@@ -60,6 +62,7 @@ export const Header: React.FC<HeaderProps> = ({
   myListCount,
   unreadCommunityCount = 0,
   unreadMessagesCount = 0,
+  onOpenNotifications,
   onOpenMessages,
   categoriesList = BOOK_CATEGORIES_LIST,
   platformSettings,
@@ -260,7 +263,28 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             )}
 
-            {/* Ícone de Mensagens Diretas (💬) */}
+            {/* Sino de Notificações (🔔) */}
+            {onOpenNotifications && (
+              <button
+                type="button"
+                onClick={() => {
+                  setCatDropdownOpen(false);
+                  onOpenNotifications();
+                }}
+                aria-label="Notificações"
+                title="Notificações de curtidas, respostas e seguidores"
+                className="relative flex h-9 w-9 items-center justify-center rounded-full text-blue-100 hover:text-white hover:bg-blue-500/15 transition-colors cursor-pointer"
+              >
+                <Bell className="w-4 h-4 stroke-[2.2]" />
+                {unreadCommunityCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-mono-num font-bold text-white shadow-md">
+                    {unreadCommunityCount > 99 ? '99+' : unreadCommunityCount}
+                  </span>
+                )}
+              </button>
+            )}
+
+            {/* Ícone de Mensagens Diretas (💬) — Oculto no celular (fica apenas na Comunidade) */}
             {onOpenMessages && (
               <button
                 type="button"
@@ -270,7 +294,7 @@ export const Header: React.FC<HeaderProps> = ({
                 }}
                 aria-label="Mensagens"
                 title="Mensagens"
-                className="relative flex h-9 w-9 items-center justify-center rounded-full text-blue-100 hover:text-white hover:bg-blue-500/15 transition-colors cursor-pointer"
+                className="relative hidden md:flex h-9 w-9 items-center justify-center rounded-full text-blue-100 hover:text-white hover:bg-blue-500/15 transition-colors cursor-pointer"
               >
                 <MessageCircle className="w-4 h-4 stroke-[2.2]" />
                 {unreadMessagesCount > 0 && (
@@ -281,28 +305,7 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             )}
 
-            {/* Botão LIVROFLIX Premium (Coroa 👑) */}
-            {onOpenPremiumModal && (
-              <button
-                type="button"
-                onClick={() => {
-                  setCatDropdownOpen(false);
-                  onOpenPremiumModal();
-                }}
-                aria-label="LIVROFLIX Premium"
-                title="LIVROFLIX Premium"
-                className={`inline-flex items-center gap-1.5 rounded-full py-1.5 px-2.5 sm:px-3.5 text-xs font-bold transition-all cursor-pointer border ${
-                  isUserPremium(userProfile)
-                    ? 'bg-gradient-to-r from-amber-500/20 to-amber-400/10 border-amber-400/50 text-amber-300 hover:border-amber-300 shadow-[0_0_18px_rgba(245,158,11,0.2)]'
-                    : 'bg-[#071426]/90 hover:bg-amber-500/15 border-amber-400/35 hover:border-amber-400/60 text-amber-300 hover:text-amber-200 shadow-[0_0_14px_rgba(245,158,11,0.12)]'
-                }`}
-              >
-                <Crown className="w-4 h-4 text-amber-400 stroke-[2.2] shrink-0" />
-                <span className="hidden sm:inline whitespace-nowrap">
-                  Premium
-                </span>
-              </button>
-            )}
+            {/* Botão LIVROFLIX Premium (Coroa 👑) — Oculto temporariamente em todos os dispositivos */}
 
             {isAdmin && (
               <button

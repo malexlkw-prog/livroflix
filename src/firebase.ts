@@ -11,15 +11,35 @@ import {
 } from 'firebase/auth';
 import {
   getFirestore,
+  initializeFirestore,
+  setLogLevel,
   doc,
-  getDocFromServer
+  getDocFromServer,
+  Firestore,
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 import { BookPdfReadingOption, UserProfile } from './types';
 
 const app = initializeApp(firebaseConfig);
 
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+// Silencia avisos transitórios internos de reconexão WebChannel do SDK (erros reais continuam tratados em handleFirestoreError)
+setLogLevel('silent');
+
+function createFirestoreInstance(): Firestore {
+  try {
+    return initializeFirestore(
+      app,
+      {
+        experimentalAutoDetectLongPolling: true,
+      },
+      firebaseConfig.firestoreDatabaseId
+    );
+  } catch {
+    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+  }
+}
+
+export const db = createFirestoreInstance();
 export const auth = getAuth(app);
 
 // Garante persistência local da sessão do Firebase Auth
@@ -39,6 +59,23 @@ export function getSavedSessionProfile(): UserProfile | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as UserProfile;
     if (parsed && parsed.uid && parsed.email) {
+      const isSavedAdmin =
+        parsed.role === 'admin' ||
+        parsed.email.trim().toLowerCase() === 'malexlkw@gmail.com' ||
+        parsed.uid === 'user-malexlkw-gmail-com' ||
+        (parsed.username || '').replace(/^@+/, '').trim().toLowerCase() ===
+          'malexlkw';
+      if (isSavedAdmin) {
+        const currentUser = auth.currentUser;
+        if (
+          !currentUser ||
+          currentUser.uid !== parsed.uid ||
+          currentUser.email?.toLowerCase() !== parsed.email.toLowerCase()
+        ) {
+          localStorage.removeItem(LIVROFLIX_SESSION_PROFILE_KEY);
+          return null;
+        }
+      }
       return parsed;
     }
   } catch {
@@ -51,12 +88,21 @@ export function saveSessionProfile(profile: UserProfile | null): void {
   try {
     if (!profile) {
       localStorage.removeItem(LIVROFLIX_SESSION_PROFILE_KEY);
-    } else {
-      localStorage.setItem(
-        LIVROFLIX_SESSION_PROFILE_KEY,
-        JSON.stringify(profile)
-      );
+      return;
     }
+    const isProfileAdmin =
+      profile.role === 'admin' ||
+      profile.email?.trim().toLowerCase() === 'malexlkw@gmail.com' ||
+      profile.uid === 'user-malexlkw-gmail-com';
+    // Never persist the admin profile into shared localStorage
+    if (isProfileAdmin) {
+      localStorage.removeItem(LIVROFLIX_SESSION_PROFILE_KEY);
+      return;
+    }
+    localStorage.setItem(
+      LIVROFLIX_SESSION_PROFILE_KEY,
+      JSON.stringify(profile)
+    );
   } catch {
     // ignore
   }

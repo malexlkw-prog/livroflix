@@ -104,11 +104,27 @@ import {
 import { AdminDashboard } from './components/AdminDashboard';
 import { PremiumModal } from './components/PremiumModal';
 import { DirectMessagesModal } from './components/DirectMessagesModal';
+import { NotificationsModal } from './components/NotificationsModal';
 import {
   getMaxProfileFavoriteBooks,
   isUserPremium,
   isValidHexColor,
 } from './utils/premiumUtils';
+import {
+  ADMIN_EMAILS,
+  getKnownAdminUids,
+  isAdminConversation,
+  isAdminFollow,
+  isAdminIdentity,
+  isAdminLike,
+  isAdminNotification,
+  isAdminPost,
+  isAdminReply,
+  isAdminReview,
+  isAdminUid,
+  isReservedAdminUsername,
+  registerKnownAdminUid,
+} from './utils/adminStealthUtils';
 
 const DEFAULT_READER_PREFS: ReaderPreferences = {
   fontSize: 20,
@@ -252,6 +268,13 @@ export default function App() {
   const [dmInitialRecipientId, setDmInitialRecipientId] = useState<
     string | null
   >(null);
+  const [notificationsModalOpen, setNotificationsModalOpen] =
+    useState<boolean>(false);
+  const [communityInitialPostId, setCommunityInitialPostId] = useState<
+    string | null
+  >(null);
+  const [communityInitialInspectUserId, setCommunityInitialInspectUserId] =
+    useState<string | null>(null);
   const [bookReviews, setBookReviews] = useState<BookReview[]>(() =>
     readLocalArray<BookReview>(LOCAL_STORAGE_BOOK_REVIEWS_KEY)
   );
@@ -306,35 +329,275 @@ export default function App() {
     return DEFAULT_READER_PREFS;
   });
 
-  // Determine if current user is Administrator
+  // Determine if current user is Administrator (strictly requires active Firebase Authentication)
   const isAdmin = Boolean(
-    (firebaseUser?.email &&
-      firebaseUser.email.toLowerCase() === 'malexlkw@gmail.com') ||
-      (userProfile?.email &&
-        userProfile.email.toLowerCase() === 'malexlkw@gmail.com') ||
-      userProfile?.role === 'admin'
+    firebaseUser &&
+      ((firebaseUser.email &&
+        firebaseUser.email.toLowerCase() === 'malexlkw@gmail.com') ||
+        (userProfile?.uid === firebaseUser.uid &&
+          (userProfile?.role === 'admin' ||
+            userProfile?.email?.toLowerCase() === 'malexlkw@gmail.com')))
   );
 
   const activeUserId = firebaseUser?.uid || userProfile?.uid || null;
 
-  // Direct Email / Admin Login Handler (works even if Google Popup domain is not yet authorized on Render)
+  useEffect(() => {
+    if (isAdmin && activeUserId) {
+      registerKnownAdminUid(activeUserId);
+    }
+  }, [isAdmin, activeUserId]);
+
+  /**
+   * Verifica de forma abrangente se um @username já existe ou está em uso por outro leitor,
+   * consultando memória (publicProfilesMap, registeredUsers, posts/respostas/reviews),
+   * registro local e Firestore (/usernames/{username} e /public_profiles).
+   */
+  const checkUsernameAvailability = async (
+    rawUsername: string,
+    excludeUid?: string
+  ): Promise<{ available: boolean; normalized: string; reason?: string }> => {
+    const validation = validateUsernameFormat(rawUsername);
+    if (!validation.valid) {
+      return {
+        available: false,
+        normalized: validation.normalized,
+        reason: validation.error || 'Nome de usuário (@username) inválido.',
+      };
+    }
+
+    const normalized = validation.normalized;
+    const targetUid = excludeUid ?? firebaseUser?.uid ?? userProfile?.uid ?? '';
+
+    // 0. Bloquear usernames reservados/administrativos para usuários comuns sem expor a conta admin
+    if (!isAdmin && isReservedAdminUsername(normalized)) {
+      return {
+        available: false,
+        normalized,
+        reason: `O nome de usuário @${normalized} não está disponível.`,
+      };
+    }
+
+    // 1. Verificar em publicProfilesMap (perfis públicos carregados em tempo real)
+    for (const pub of Object.values(publicProfilesMap)) {
+      if (!pub || !pub.uid || pub.uid === targetUid) continue;
+      const pubUsername = (pub.username || '')
+        .replace(/^@+/, '')
+        .trim()
+        .toLowerCase();
+      if (pubUsername && pubUsername === normalized) {
+        if (!isAdminIdentity(pub)) {
+          saveLocalUsernameOwner(normalized, pub.uid);
+        }
+        return {
+          available: false,
+          normalized,
+          reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
+        };
+      }
+    }
+
+    // 2. Verificar em registeredUsers (lista de usuários carregada)
+    for (const u of registeredUsers) {
+      if (!u || !u.uid || u.uid === targetUid) continue;
+      const uName = (u.username || generateDefaultUsername(u))
+        .replace(/^@+/, '')
+        .trim()
+        .toLowerCase();
+      if (uName && uName === normalized) {
+        if (!isAdminIdentity(u)) {
+          saveLocalUsernameOwner(normalized, u.uid);
+        }
+        return {
+          available: false,
+          normalized,
+          reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
+        };
+      }
+    }
+
+    // 3. Verificar em publicações, respostas e reviews da comunidade (caso o autor ainda não esteja em publicProfilesMap)
+    for (const post of communityPosts) {
+      if (!post.authorId || post.authorId === targetUid) continue;
+      const activeAuthorUsername = (
+        publicProfilesMap[post.authorId]?.username ||
+        post.authorUsername ||
+        ''
+      )
+        .replace(/^@+/, '')
+        .trim()
+        .toLowerCase();
+      if (activeAuthorUsername && activeAuthorUsername === normalized) {
+        saveLocalUsernameOwner(normalized, post.authorId);
+        return {
+          available: false,
+          normalized,
+          reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
+        };
+      }
+    }
+
+    for (const reply of communityReplies) {
+      if (!reply.authorId || reply.authorId === targetUid) continue;
+      const activeAuthorUsername = (
+        publicProfilesMap[reply.authorId]?.username ||
+        reply.authorUsername ||
+        ''
+      )
+        .replace(/^@+/, '')
+        .trim()
+        .toLowerCase();
+      if (activeAuthorUsername && activeAuthorUsername === normalized) {
+        saveLocalUsernameOwner(normalized, reply.authorId);
+        return {
+          available: false,
+          normalized,
+          reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
+        };
+      }
+    }
+
+    for (const rev of bookReviews) {
+      if (!rev.userId || rev.userId === targetUid) continue;
+      const activeAuthorUsername = (
+        publicProfilesMap[rev.userId]?.username ||
+        rev.authorUsername ||
+        ''
+      )
+        .replace(/^@+/, '')
+        .trim()
+        .toLowerCase();
+      if (activeAuthorUsername && activeAuthorUsername === normalized) {
+        saveLocalUsernameOwner(normalized, rev.userId);
+        return {
+          available: false,
+          normalized,
+          reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
+        };
+      }
+    }
+
+    // 4. Verificar no registro local (localStorage)
+    const localRegistry = getLocalUsernamesRegistry();
+    if (
+      localRegistry[normalized] &&
+      localRegistry[normalized] !== targetUid
+    ) {
+      return {
+        available: false,
+        normalized,
+        reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
+      };
+    }
+
+    // 5. Verificar no Firestore (/usernames/{normalized})
+    try {
+      const usernameSnap = await getDoc(doc(db, 'usernames', normalized));
+      if (usernameSnap.exists()) {
+        const data = usernameSnap.data() as { uid?: string };
+        if (data?.uid && data.uid !== targetUid) {
+          saveLocalUsernameOwner(normalized, data.uid);
+          return {
+            available: false,
+            normalized,
+            reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
+          };
+        }
+      }
+    } catch {
+      // Prossegue para verificação em public_profiles caso falhe
+    }
+
+    // 6. Verificar no Firestore (/public_profiles onde username == normalized)
+    try {
+      const [pubSnapClean, pubSnapAt] = await Promise.all([
+        getDocs(
+          query(
+            collection(db, 'public_profiles'),
+            where('username', '==', normalized)
+          )
+        ),
+        getDocs(
+          query(
+            collection(db, 'public_profiles'),
+            where('username', '==', `@${normalized}`)
+          )
+        ),
+      ]);
+      for (const d of [...pubSnapClean.docs, ...pubSnapAt.docs]) {
+        const data = d.data() as PublicProfile;
+        const docUid = data?.uid || d.id;
+        if (docUid && docUid !== targetUid) {
+          saveLocalUsernameOwner(normalized, docUid);
+          return {
+            available: false,
+            normalized,
+            reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
+          };
+        }
+      }
+    } catch {
+      // Prossegue caso offline
+    }
+
+    return { available: true, normalized };
+  };
+
+  /**
+   * Garante que o username padrão gerado no primeiro login nunca colida com um username já existente.
+   */
+  const resolveUniqueDefaultUsername = async (
+    profileCandidate: Pick<UserProfile, 'nome' | 'displayName' | 'email' | 'uid'>,
+    targetUid: string
+  ): Promise<string> => {
+    const baseCandidate = generateDefaultUsername(profileCandidate);
+    const firstCheck = await checkUsernameAvailability(baseCandidate, targetUid);
+    if (firstCheck.available) {
+      return firstCheck.normalized;
+    }
+
+    const uidSuffix = (targetUid || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '')
+      .slice(-5);
+    if (uidSuffix) {
+      const withUid = `${baseCandidate.slice(0, 23)}_${uidSuffix}`;
+      const secondCheck = await checkUsernameAvailability(withUid, targetUid);
+      if (secondCheck.available) {
+        return secondCheck.normalized;
+      }
+    }
+
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    return `${baseCandidate.slice(0, 24)}_${randomSuffix}`;
+  };
+
+  // Direct Email Login Handler (blocks any unauthenticated access to admin email)
   const handleDirectSignIn = async (emailInput: string, nameInput?: string) => {
     const cleanEmail = emailInput.trim().toLowerCase();
     if (!cleanEmail) return;
-    const isOwnerAdmin = cleanEmail === 'malexlkw@gmail.com';
+    if (
+      ADMIN_EMAILS.has(cleanEmail) ||
+      isReservedAdminUsername(cleanEmail.split('@')[0])
+    ) {
+      throw new Error(
+        'Para esta conta, utilize exclusivamente a autenticação oficial com Google.'
+      );
+    }
+    const isOwnerAdmin = false;
     const deterministicUid =
       'user-' + cleanEmail.replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     const userRef = doc(db, 'users', deterministicUid);
 
-    const initialName =
-      nameInput?.trim() ||
-      (isOwnerAdmin ? 'Marcos Leandro' : cleanEmail.split('@')[0]);
-    const defaultUsername = generateDefaultUsername({
-      uid: deterministicUid,
-      nome: initialName,
-      displayName: initialName,
-      email: cleanEmail,
-    });
+    const initialName = nameInput?.trim() || cleanEmail.split('@')[0];
+    const defaultUsername = await resolveUniqueDefaultUsername(
+      {
+        uid: deterministicUid,
+        nome: initialName,
+        displayName: initialName,
+        email: cleanEmail,
+      },
+      deterministicUid
+    );
 
     let finalProfile: UserProfile = {
       uid: deterministicUid,
@@ -474,14 +737,17 @@ export default function App() {
             const resolvedPhoto = hasSavedPhoto
               ? (existingData.photoURL ?? existingData.foto ?? '')
               : (user.photoURL || '');
-            const resolvedUsername =
-              existingData.username ||
-              generateDefaultUsername({
-                uid: user.uid,
-                nome: resolvedName,
-                displayName: resolvedName,
-                email: user.email || existingData.email || '',
-              });
+            const resolvedUsername = existingData.username
+              ? existingData.username.replace(/^@+/, '').toLowerCase()
+              : await resolveUniqueDefaultUsername(
+                  {
+                    uid: user.uid,
+                    nome: resolvedName,
+                    displayName: resolvedName,
+                    email: user.email || existingData.email || '',
+                  },
+                  user.uid
+                );
             const resolvedBio =
               typeof existingData.bio === 'string' ? existingData.bio : '';
 
@@ -531,12 +797,15 @@ export default function App() {
               user.email?.split('@')[0] ||
               'Leitor LIVROFLIX';
             const initialPhoto = user.photoURL || '';
-            const initialUsername = generateDefaultUsername({
-              uid: user.uid,
-              nome: initialName,
-              displayName: initialName,
-              email: user.email || '',
-            });
+            const initialUsername = await resolveUniqueDefaultUsername(
+              {
+                uid: user.uid,
+                nome: initialName,
+                displayName: initialName,
+                email: user.email || '',
+              },
+              user.uid
+            );
             const newProfile: UserProfile = stripUndefined({
               uid: user.uid,
               nome: initialName,
@@ -744,6 +1013,44 @@ export default function App() {
             await setDoc(doc(db, 'home_rows', row.id), stripUndefined(row));
           }
         }
+
+        // Purge any public_profiles documents belonging to the Admin so the admin account is never visible to other users
+        const adminUidsToHide = new Set<string>([
+          firebaseUser.uid,
+          'user-malexlkw-gmail-com',
+        ]);
+        registerKnownAdminUid(firebaseUser.uid);
+
+        try {
+          const usersSnap = await getDocs(collection(db, 'users'));
+          usersSnap.forEach((uDoc) => {
+            const uData = uDoc.data() as UserProfile;
+            if (isAdminIdentity({ ...uData, uid: uDoc.id })) {
+              adminUidsToHide.add(uDoc.id);
+              if (uData.uid) adminUidsToHide.add(uData.uid);
+            }
+          });
+        } catch {
+          // ignore
+        }
+
+        try {
+          const pubSnap = await getDocs(collection(db, 'public_profiles'));
+          for (const pDoc of pubSnap.docs) {
+            const pData = pDoc.data() as PublicProfile;
+            if (
+              adminUidsToHide.has(pDoc.id) ||
+              (pData.uid && adminUidsToHide.has(pData.uid)) ||
+              isAdminIdentity({ ...pData, uid: pData.uid || pDoc.id })
+            ) {
+              await deleteDoc(doc(db, 'public_profiles', pDoc.id)).catch(
+                () => {}
+              );
+            }
+          }
+        } catch {
+          // ignore
+        }
       } catch (error) {
         console.warn('Cleanup check info:', error);
       }
@@ -772,8 +1079,8 @@ export default function App() {
   // 7. Strictly Isolated Real User Library Subscription (/users/{userId}/library)
   // Purges any legacy auto-seeded library items and never seeds fake books.
   useEffect(() => {
-    if (!activeUserId) return;
-    const userId = activeUserId;
+    const userId = firebaseUser?.uid;
+    if (!userId) return;
     const libRef = collection(db, 'users', userId, 'library');
 
     const unsubscribe = onSnapshot(
@@ -803,15 +1110,24 @@ export default function App() {
     );
 
     return () => unsubscribe();
-  }, [activeUserId]);
+  }, [firebaseUser?.uid]);
 
   // 8. Load Registered Users for Admin Panel when user is Admin
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!isAdmin) {
+      setRegisteredUsers([]);
+      return;
+    }
     getDocs(collection(db, 'users'))
       .then((snap) => {
         const list: UserProfile[] = [];
-        snap.forEach((d) => list.push(d.data() as UserProfile));
+        snap.forEach((d) => {
+          const u = d.data() as UserProfile;
+          if (isAdminIdentity({ ...u, uid: u.uid || d.id })) {
+            registerKnownAdminUid(u.uid || d.id);
+          }
+          list.push(u);
+        });
         setRegisteredUsers(list);
       })
       .catch((error) => {
@@ -820,8 +1136,25 @@ export default function App() {
   }, [isAdmin, activeUserId, activeView]);
 
   // 9. Sync current user's PublicProfile (/public_profiles/{uid}) so Community cards & @mentions stay up-to-date
+  // Admin account is strictly excluded and purged from /public_profiles so it is never visible to other users.
   useEffect(() => {
     if (!userProfile?.uid) return;
+    if (isAdmin || isAdminIdentity(userProfile)) {
+      registerKnownAdminUid(userProfile.uid);
+      setPublicProfilesMap((prev) => {
+        if (!(userProfile.uid in prev)) return prev;
+        const next = { ...prev };
+        delete next[userProfile.uid];
+        return next;
+      });
+      if (firebaseUser && firebaseUser.uid === userProfile.uid) {
+        deleteDoc(doc(db, 'public_profiles', userProfile.uid)).catch(() => {});
+        deleteDoc(doc(db, 'public_profiles', 'user-malexlkw-gmail-com')).catch(
+          () => {}
+        );
+      }
+      return;
+    }
     const displayName =
       userProfile.displayName || userProfile.nome || 'Leitor LIVROFLIX';
     const username = (
@@ -881,6 +1214,22 @@ export default function App() {
         stripUndefined(pubProfile),
         { merge: true }
       ).catch(() => {});
+
+      // Também garante que o @username atual do usuário esteja registrado no índice /usernames/{username}
+      if (validateUsernameFormat(username).valid) {
+        const unameRef = doc(db, 'usernames', username);
+        getDoc(unameRef)
+          .then((snap) => {
+            if (!snap.exists()) {
+              return setDoc(unameRef, {
+                uid: userProfile.uid,
+                username,
+                updatedAt: pubProfile.updatedAt,
+              });
+            }
+          })
+          .catch(() => {});
+      }
     }
   }, [
     firebaseUser,
@@ -1063,6 +1412,11 @@ export default function App() {
   }, [books, userLibrary, userProfile, firebaseUser]);
 
   // 10. Real-time Subscriptions for Community Collections
+  const firebaseUserRef = useRef<User | null>(firebaseUser);
+  useEffect(() => {
+    firebaseUserRef.current = firebaseUser;
+  }, [firebaseUser]);
+
   useEffect(() => {
     const unsubProfiles = onSnapshot(
       collection(db, 'public_profiles'),
@@ -1071,9 +1425,22 @@ export default function App() {
         snap.forEach((d) => {
           const data = d.data() as PublicProfile;
           const uid = data.uid || d.id;
+          if (isAdminIdentity({ ...data, uid })) {
+            registerKnownAdminUid(uid);
+            return;
+          }
           nextMap[uid] = { ...data, uid };
+          if (uid && data.username) {
+            const cleanUname = data.username
+              .replace(/^@+/, '')
+              .trim()
+              .toLowerCase();
+            if (cleanUname) {
+              saveLocalUsernameOwner(cleanUname, uid);
+            }
+          }
         });
-        setPublicProfilesMap((prev) => ({ ...prev, ...nextMap }));
+        setPublicProfilesMap(nextMap);
       },
       () => {}
     );
@@ -1090,7 +1457,7 @@ export default function App() {
           list.push({ ...data, id });
         });
         setCommunityPosts((prev) => {
-          const merged = firebaseUser
+          const merged = firebaseUserRef.current
             ? list
             : [...list, ...prev.filter((p) => !remoteIds.has(p.id))];
           return merged.sort((a, b) =>
@@ -1115,7 +1482,7 @@ export default function App() {
           list.push({ ...data, id });
         });
         setCommunityLikes((prev) =>
-          firebaseUser
+          firebaseUserRef.current
             ? list
             : [...list, ...prev.filter((l) => !remoteIds.has(l.id))]
         );
@@ -1137,7 +1504,7 @@ export default function App() {
           list.push({ ...data, id });
         });
         setCommunityReplies((prev) => {
-          const merged = firebaseUser
+          const merged = firebaseUserRef.current
             ? list
             : [...list, ...prev.filter((r) => !remoteIds.has(r.id))];
           return merged.sort((a, b) =>
@@ -1162,7 +1529,7 @@ export default function App() {
           list.push({ ...data, id });
         });
         setCommunityFollows((prev) =>
-          firebaseUser
+          firebaseUserRef.current
             ? list
             : [...list, ...prev.filter((f) => !remoteIds.has(f.id))]
         );
@@ -1186,7 +1553,7 @@ export default function App() {
           }
         });
         setBookReviews((prev) => {
-          const merged = firebaseUser
+          const merged = firebaseUserRef.current
             ? list
             : [...list, ...prev.filter((r) => !remoteIds.has(r.id))];
           return merged.sort((a, b) =>
@@ -1207,7 +1574,7 @@ export default function App() {
       unsubFollows();
       unsubBookReviews();
     };
-  }, [firebaseUser]);
+  }, []);
 
   // 11. Real-time Subscription for Current User's Community Notifications (/community_notifications)
   useEffect(() => {
@@ -1295,22 +1662,24 @@ export default function App() {
     };
     setUserLibrary(nextLibrary);
 
-    if (!activeUserId) {
-      try {
-        localStorage.setItem(LOCAL_STORAGE_LIB_KEY, JSON.stringify(nextLibrary));
-      } catch {
-        // ignore
-      }
+    try {
+      localStorage.setItem(LOCAL_STORAGE_LIB_KEY, JSON.stringify(nextLibrary));
+    } catch {
+      // ignore
+    }
+
+    const authedUid = firebaseUser?.uid;
+    if (!authedUid) {
       return;
     }
 
-    const path = `users/${activeUserId}/library/${updatedItem.bookId}`;
+    const path = `users/${authedUid}/library/${updatedItem.bookId}`;
     try {
       await setDoc(
-        doc(db, 'users', activeUserId, 'library', updatedItem.bookId),
+        doc(db, 'users', authedUid, 'library', updatedItem.bookId),
         stripUndefined({
           ...updatedItem,
-          userId: activeUserId,
+          userId: authedUid,
         }),
         { merge: true }
       );
@@ -1388,10 +1757,13 @@ export default function App() {
       updatedAt: nowIso,
     });
 
-    setPublicProfilesMap((prev) => ({
-      ...prev,
-      [targetUid]: updatedPubProfile,
-    }));
+    const isTargetAdmin = isAdmin || isAdminIdentity(updatedProfile);
+    if (!isTargetAdmin) {
+      setPublicProfilesMap((prev) => ({
+        ...prev,
+        [targetUid]: updatedPubProfile,
+      }));
+    }
 
     if (firebaseUser) {
       try {
@@ -1405,11 +1777,15 @@ export default function App() {
           },
           { merge: true }
         );
-        setDoc(
-          doc(db, 'public_profiles', targetUid),
-          stripUndefined(updatedPubProfile),
-          { merge: true }
-        ).catch(() => {});
+        if (!isTargetAdmin) {
+          setDoc(
+            doc(db, 'public_profiles', targetUid),
+            stripUndefined(updatedPubProfile),
+            { merge: true }
+          ).catch(() => {});
+        } else {
+          deleteDoc(doc(db, 'public_profiles', targetUid)).catch(() => {});
+        }
       } catch (error) {
         handleFirestoreError(
           error,
@@ -1804,59 +2180,24 @@ export default function App() {
     const cleanBio = input.bio.trim().slice(0, 160);
     const cleanPhotoURL = input.photoURL || '';
 
-    // 1. Verificar unicidade de @username na memória (registeredUsers) e registro local
-    const conflictInMemory = registeredUsers.some(
-      (u) =>
-        u.uid !== targetUid &&
-        (u.username || '').replace(/^@+/, '').toLowerCase() ===
-          normalizedUsername
+    // 1. Verificar de forma abrangente a unicidade do @username (memória, public_profiles, local e Firestore)
+    const availability = await checkUsernameAvailability(
+      normalizedUsername,
+      targetUid
     );
-    if (conflictInMemory) {
+    if (!availability.available) {
       throw new Error(
-        `O nome de usuário @${normalizedUsername} já está sendo usado por outro leitor.`
+        availability.reason ||
+          `O nome de usuário @${normalizedUsername} já está sendo usado por outro leitor.`
       );
     }
 
-    const localRegistry = getLocalUsernamesRegistry();
-    if (
-      localRegistry[normalizedUsername] &&
-      localRegistry[normalizedUsername] !== targetUid
-    ) {
-      throw new Error(
-        `O nome de usuário @${normalizedUsername} já está sendo usado por outro leitor.`
-      );
-    }
-
-    // 2. Verificar unicidade de @username no Firestore (/usernames/{username})
     const usernameRef = doc(db, 'usernames', normalizedUsername);
-    try {
-      const usernameSnap = await getDoc(usernameRef);
-      if (usernameSnap.exists()) {
-        const data = usernameSnap.data() as { uid?: string };
-        if (data?.uid && data.uid !== targetUid) {
-          throw new Error(
-            `O nome de usuário @${normalizedUsername} já está sendo usado por outro leitor.`
-          );
-        }
-      }
-    } catch (err: unknown) {
-      if (
-        err instanceof Error &&
-        err.message.includes('já está sendo usado')
-      ) {
-        throw err;
-      }
-      // Se houver falha de rede/offline, prossegue com verificação local
-    }
 
     const nowIso = new Date().toISOString();
     const nextUsernameChangeHistory = isChangingUsername
       ? [...changeStatus.validTimestampsIso, nowIso].slice(-5)
       : changeStatus.validTimestampsIso;
-
-    if (isChangingUsername) {
-      saveLocalUsernameChangeHistory(targetUid, nextUsernameChangeHistory);
-    }
 
     const validBookIdsSet = new Set(books.map((b) => b.id));
     const rawFavIds = Array.isArray(input.favoriteBooks)
@@ -1898,9 +2239,22 @@ export default function App() {
       updatedAt: nowIso,
     });
 
-    // 3. Persistir no Firestore (/usernames/{username} e /users/{uid})
+    // 2. Persistir no Firestore (/usernames/{username} e /users/{uid})
     if (firebaseUser) {
       try {
+        const latestUsernameSnap = await getDoc(usernameRef);
+        if (latestUsernameSnap.exists()) {
+          const existingOwnerUid = (
+            latestUsernameSnap.data() as { uid?: string }
+          )?.uid;
+          if (existingOwnerUid && existingOwnerUid !== targetUid) {
+            saveLocalUsernameOwner(normalizedUsername, existingOwnerUid);
+            throw new Error(
+              `O nome de usuário @${normalizedUsername} já está reservado por outro leitor.`
+            );
+          }
+        }
+
         await setDoc(usernameRef, {
           uid: targetUid,
           username: normalizedUsername,
@@ -1911,9 +2265,18 @@ export default function App() {
           deleteDoc(doc(db, 'usernames', previousUsername)).catch(() => {});
         }
       } catch (err: unknown) {
-        // Se a regra do Firestore rejeitou a escrita em /usernames por já pertencer a outro uid
+        if (
+          err instanceof Error &&
+          (err.message.includes('já está') || err.message.includes('reservado'))
+        ) {
+          throw err;
+        }
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('insufficient')) {
+        if (
+          isChangingUsername ||
+          msg.toLowerCase().includes('permission') ||
+          msg.toLowerCase().includes('insufficient')
+        ) {
           throw new Error(
             `O nome de usuário @${normalizedUsername} já está reservado por outro leitor.`
           );
@@ -1950,6 +2313,10 @@ export default function App() {
       }).catch(() => {});
     }
 
+    if (isChangingUsername) {
+      saveLocalUsernameChangeHistory(targetUid, nextUsernameChangeHistory);
+    }
+
     // 4. Atualizar estado local, perfil público da comunidade e sessão persistente
     const updatedPubProfile: PublicProfile = stripUndefined({
       uid: targetUid,
@@ -1964,19 +2331,23 @@ export default function App() {
       profileFavoriteBooks: cleanFavoriteBooks,
       updatedAt: nowIso,
     });
-    setPublicProfilesMap((prev) => ({
-      ...prev,
-      [targetUid]: updatedPubProfile,
-    }));
-    if (firebaseUser) {
-      setDoc(
-        doc(db, 'public_profiles', targetUid),
-        stripUndefined(updatedPubProfile),
-        { merge: true }
-      ).catch(() => {});
+    const isTargetAdmin = isAdmin || isAdminIdentity(updatedProfile);
+    if (!isTargetAdmin) {
+      setPublicProfilesMap((prev) => ({
+        ...prev,
+        [targetUid]: updatedPubProfile,
+      }));
+      if (firebaseUser) {
+        setDoc(
+          doc(db, 'public_profiles', targetUid),
+          stripUndefined(updatedPubProfile),
+          { merge: true }
+        ).catch(() => {});
+      }
+      saveLocalUsernameOwner(normalizedUsername, targetUid, previousUsername);
+    } else if (firebaseUser) {
+      deleteDoc(doc(db, 'public_profiles', targetUid)).catch(() => {});
     }
-
-    saveLocalUsernameOwner(normalizedUsername, targetUid, previousUsername);
     saveSessionProfile(updatedProfile);
     setUserProfile(updatedProfile);
     setRegisteredUsers((prev) =>
@@ -2083,17 +2454,22 @@ export default function App() {
       updatedAt: nowIso,
     });
 
-    setPublicProfilesMap((prev) => ({
-      ...prev,
-      [targetUid]: updatedPubProfile,
-    }));
+    const isTargetAdmin = isAdmin || isAdminIdentity(updatedProfile);
+    if (!isTargetAdmin) {
+      setPublicProfilesMap((prev) => ({
+        ...prev,
+        [targetUid]: updatedPubProfile,
+      }));
 
-    if (firebaseUser) {
-      setDoc(
-        doc(db, 'public_profiles', targetUid),
-        stripUndefined(updatedPubProfile),
-        { merge: true }
-      ).catch(() => {});
+      if (firebaseUser) {
+        setDoc(
+          doc(db, 'public_profiles', targetUid),
+          stripUndefined(updatedPubProfile),
+          { merge: true }
+        ).catch(() => {});
+      }
+    } else if (firebaseUser) {
+      deleteDoc(doc(db, 'public_profiles', targetUid)).catch(() => {});
     }
 
     saveSessionProfile(updatedProfile);
@@ -2155,10 +2531,13 @@ export default function App() {
       updatedAt: nowIso,
     });
 
-    setPublicProfilesMap((prev) => ({
-      ...prev,
-      [targetUid]: updatedPubProfile,
-    }));
+    const isTargetAdmin = isAdmin || isAdminIdentity(updatedProfile);
+    if (!isTargetAdmin) {
+      setPublicProfilesMap((prev) => ({
+        ...prev,
+        [targetUid]: updatedPubProfile,
+      }));
+    }
 
     if (firebaseUser) {
       try {
@@ -2174,11 +2553,15 @@ export default function App() {
           },
           { merge: true }
         );
-        setDoc(
-          doc(db, 'public_profiles', targetUid),
-          stripUndefined(updatedPubProfile),
-          { merge: true }
-        ).catch(() => {});
+        if (!isTargetAdmin) {
+          setDoc(
+            doc(db, 'public_profiles', targetUid),
+            stripUndefined(updatedPubProfile),
+            { merge: true }
+          ).catch(() => {});
+        } else {
+          deleteDoc(doc(db, 'public_profiles', targetUid)).catch(() => {});
+        }
       } catch (error) {
         handleFirestoreError(
           error,
@@ -2213,29 +2596,50 @@ export default function App() {
   ): Promise<string | null> => {
     const normalized = usernameInput.replace(/^@+/, '').toLowerCase().trim();
     if (!normalized) return null;
+    if (!isAdmin && isReservedAdminUsername(normalized)) return null;
 
     // 1. Check publicProfilesMap
     const foundPublic = Object.values(publicProfilesMap).find(
       (p) => (p.username || '').replace(/^@+/, '').toLowerCase() === normalized
     );
-    if (foundPublic?.uid) return foundPublic.uid;
+    if (foundPublic?.uid) {
+      if (!isAdmin && isAdminIdentity(foundPublic)) return null;
+      return foundPublic.uid;
+    }
 
     // 2. Check registeredUsers in memory
     const foundReg = registeredUsers.find(
       (u) => (u.username || '').replace(/^@+/, '').toLowerCase() === normalized
     );
-    if (foundReg?.uid) return foundReg.uid;
+    if (foundReg?.uid) {
+      if (!isAdmin && isAdminIdentity(foundReg)) return null;
+      return foundReg.uid;
+    }
 
     // 3. Check local usernames registry
     const localMap = getLocalUsernamesRegistry();
-    if (localMap[normalized]) return localMap[normalized];
+    if (localMap[normalized]) {
+      const localUid = localMap[normalized];
+      if (!isAdmin && isAdminUid(localUid, publicProfilesMap, registeredUsers)) {
+        return null;
+      }
+      return localUid;
+    }
 
     // 4. Query /usernames/{normalized} in Firestore
     try {
       const snap = await getDoc(doc(db, 'usernames', normalized));
       if (snap.exists()) {
         const data = snap.data() as { uid?: string };
-        if (data?.uid) return data.uid;
+        if (data?.uid) {
+          if (
+            !isAdmin &&
+            isAdminUid(data.uid, publicProfilesMap, registeredUsers)
+          ) {
+            return null;
+          }
+          return data.uid;
+        }
       }
     } catch {
       // ignore
@@ -2339,27 +2743,29 @@ export default function App() {
         throw new Error('Não foi possível salvar sua publicação. Tente novamente.');
       }
 
-      // Send notifications for @username mentions
-      for (const mentionedUsername of mentions) {
-        const targetUid = await resolveUidByUsername(mentionedUsername);
-        if (targetUid && targetUid !== activeUserId) {
-          const notifId = `notif_mention_${postId}_${targetUid}`;
-          const notif: CommunityNotification = stripUndefined({
-            id: notifId,
-            recipientId: targetUid,
-            actorId: activeUserId,
-            actorName: authorName,
-            actorUsername: authorUsername,
-            actorPhotoURL: authorPhotoURL,
-            type: 'mention',
-            postId,
-            postSnippet: cleanText.slice(0, 120),
-            read: false,
-            createdAt: nowIso,
-          });
-          setDoc(doc(db, 'community_notifications', notifId), notif).catch(
-            () => {}
-          );
+      // Send notifications for @username mentions (only when actor is not Admin, keeping Admin invisible)
+      if (!isAdmin && !isAdminIdentity(userProfile)) {
+        for (const mentionedUsername of mentions) {
+          const targetUid = await resolveUidByUsername(mentionedUsername);
+          if (targetUid && targetUid !== activeUserId) {
+            const notifId = `notif_mention_${postId}_${targetUid}`;
+            const notif: CommunityNotification = stripUndefined({
+              id: notifId,
+              recipientId: targetUid,
+              actorId: activeUserId,
+              actorName: authorName,
+              actorUsername: authorUsername,
+              actorPhotoURL: authorPhotoURL,
+              type: 'mention',
+              postId,
+              postSnippet: cleanText.slice(0, 120),
+              read: false,
+              createdAt: nowIso,
+            });
+            setDoc(doc(db, 'community_notifications', notifId), notif).catch(
+              () => {}
+            );
+          }
         }
       }
     }
@@ -2437,7 +2843,12 @@ export default function App() {
           );
         }
 
-        if (post.authorId !== activeUserId) {
+        if (
+          post.authorId !== activeUserId &&
+          !isAdmin &&
+          !isAdminIdentity(userProfile) &&
+          !isAdminUid(post.authorId, publicProfilesMap, registeredUsers)
+        ) {
           const authorName =
             userProfile.displayName || userProfile.nome || 'Leitor LIVROFLIX';
           const authorUsername = (
@@ -2533,47 +2944,23 @@ export default function App() {
 
       const notifiedRecipients = new Set<string>();
 
-      // 1. Notify post author about the reply
-      if (input.postAuthorId && input.postAuthorId !== activeUserId) {
-        notifiedRecipients.add(input.postAuthorId);
-        const notifId = `notif_reply_${replyId}_${input.postAuthorId}`;
-        const notif: CommunityNotification = stripUndefined({
-          id: notifId,
-          recipientId: input.postAuthorId,
-          actorId: activeUserId,
-          actorName: authorName,
-          actorUsername: authorUsername,
-          actorPhotoURL: authorPhotoURL,
-          type: 'reply',
-          postId: input.postId,
-          replyId,
-          postSnippet: cleanText.slice(0, 120),
-          read: false,
-          createdAt: nowIso,
-        });
-        setDoc(doc(db, 'community_notifications', notifId), notif).catch(
-          () => {}
-        );
-      }
-
-      // 2. Notify mentioned users (@username) in the reply
-      for (const mentionedUsername of mentions) {
-        const targetUid = await resolveUidByUsername(mentionedUsername);
+      if (!isAdmin && !isAdminIdentity(userProfile)) {
+        // 1. Notify post author about the reply
         if (
-          targetUid &&
-          targetUid !== activeUserId &&
-          !notifiedRecipients.has(targetUid)
+          input.postAuthorId &&
+          input.postAuthorId !== activeUserId &&
+          !isAdminUid(input.postAuthorId, publicProfilesMap, registeredUsers)
         ) {
-          notifiedRecipients.add(targetUid);
-          const notifId = `notif_mention_reply_${replyId}_${targetUid}`;
+          notifiedRecipients.add(input.postAuthorId);
+          const notifId = `notif_reply_${replyId}_${input.postAuthorId}`;
           const notif: CommunityNotification = stripUndefined({
             id: notifId,
-            recipientId: targetUid,
+            recipientId: input.postAuthorId,
             actorId: activeUserId,
             actorName: authorName,
             actorUsername: authorUsername,
             actorPhotoURL: authorPhotoURL,
-            type: 'mention',
+            type: 'reply',
             postId: input.postId,
             replyId,
             postSnippet: cleanText.slice(0, 120),
@@ -2583,6 +2970,74 @@ export default function App() {
           setDoc(doc(db, 'community_notifications', notifId), notif).catch(
             () => {}
           );
+        }
+
+        // 1b. Notify parent reply author if replying to a specific comment
+        if (input.parentReplyId) {
+          const parentReply = communityReplies.find(
+            (r) => r.id === input.parentReplyId
+          );
+          if (
+            parentReply &&
+            parentReply.authorId &&
+            parentReply.authorId !== activeUserId &&
+            !notifiedRecipients.has(parentReply.authorId) &&
+            !isAdminUid(
+              parentReply.authorId,
+              publicProfilesMap,
+              registeredUsers
+            )
+          ) {
+            notifiedRecipients.add(parentReply.authorId);
+            const notifId = `notif_reply_parent_${replyId}_${parentReply.authorId}`;
+            const notif: CommunityNotification = stripUndefined({
+              id: notifId,
+              recipientId: parentReply.authorId,
+              actorId: activeUserId,
+              actorName: authorName,
+              actorUsername: authorUsername,
+              actorPhotoURL: authorPhotoURL,
+              type: 'reply',
+              postId: input.postId,
+              replyId,
+              postSnippet: cleanText.slice(0, 120),
+              read: false,
+              createdAt: nowIso,
+            });
+            setDoc(doc(db, 'community_notifications', notifId), notif).catch(
+              () => {}
+            );
+          }
+        }
+
+        // 2. Notify mentioned users (@username) in the reply
+        for (const mentionedUsername of mentions) {
+          const targetUid = await resolveUidByUsername(mentionedUsername);
+          if (
+            targetUid &&
+            targetUid !== activeUserId &&
+            !notifiedRecipients.has(targetUid)
+          ) {
+            notifiedRecipients.add(targetUid);
+            const notifId = `notif_mention_reply_${replyId}_${targetUid}`;
+            const notif: CommunityNotification = stripUndefined({
+              id: notifId,
+              recipientId: targetUid,
+              actorId: activeUserId,
+              actorName: authorName,
+              actorUsername: authorUsername,
+              actorPhotoURL: authorPhotoURL,
+              type: 'mention',
+              postId: input.postId,
+              replyId,
+              postSnippet: cleanText.slice(0, 120),
+              read: false,
+              createdAt: nowIso,
+            });
+            setDoc(doc(db, 'community_notifications', notifId), notif).catch(
+              () => {}
+            );
+          }
         }
       }
     }
@@ -2616,6 +3071,12 @@ export default function App() {
     if (!userProfile || !activeUserId) return;
     if (targetUserId === activeUserId) {
       throw new Error('Você não pode seguir a si mesmo.');
+    }
+    if (
+      !isAdmin &&
+      isAdminUid(targetUserId, publicProfilesMap, registeredUsers)
+    ) {
+      return;
     }
 
     const followId = `${activeUserId}_${targetUserId}`;
@@ -2663,29 +3124,31 @@ export default function App() {
           );
         }
 
-        const authorName =
-          userProfile.displayName || userProfile.nome || 'Leitor LIVROFLIX';
-        const authorUsername = (
-          userProfile.username || generateDefaultUsername(userProfile)
-        )
-          .replace(/^@+/, '')
-          .toLowerCase();
-        const authorPhotoURL = userProfile.photoURL ?? userProfile.foto ?? '';
-        const notifId = `notif_follow_${activeUserId}_${targetUserId}`;
-        const notif: CommunityNotification = stripUndefined({
-          id: notifId,
-          recipientId: targetUserId,
-          actorId: activeUserId,
-          actorName: authorName,
-          actorUsername: authorUsername,
-          actorPhotoURL: authorPhotoURL,
-          type: 'follow',
-          read: false,
-          createdAt: nowIso,
-        });
-        setDoc(doc(db, 'community_notifications', notifId), notif).catch(
-          () => {}
-        );
+        if (!isAdmin && !isAdminIdentity(userProfile)) {
+          const authorName =
+            userProfile.displayName || userProfile.nome || 'Leitor LIVROFLIX';
+          const authorUsername = (
+            userProfile.username || generateDefaultUsername(userProfile)
+          )
+            .replace(/^@+/, '')
+            .toLowerCase();
+          const authorPhotoURL = userProfile.photoURL ?? userProfile.foto ?? '';
+          const notifId = `notif_follow_${activeUserId}_${targetUserId}`;
+          const notif: CommunityNotification = stripUndefined({
+            id: notifId,
+            recipientId: targetUserId,
+            actorId: activeUserId,
+            actorName: authorName,
+            actorUsername: authorUsername,
+            actorPhotoURL: authorPhotoURL,
+            type: 'follow',
+            read: false,
+            createdAt: nowIso,
+          });
+          setDoc(doc(db, 'community_notifications', notifId), notif).catch(
+            () => {}
+          );
+        }
       }
     }
   };
@@ -2711,6 +3174,28 @@ export default function App() {
           { merge: true }
         ).catch(() => {});
       }
+    }
+  };
+
+  const handleMarkSingleNotificationRead = async (
+    notificationId: string
+  ): Promise<void> => {
+    if (!activeUserId || !notificationId) return;
+    const target = communityNotifications.find(
+      (n) => n.id === notificationId && n.recipientId === activeUserId
+    );
+    if (!target || target.read) return;
+
+    setCommunityNotifications((prev) =>
+      prev.map((n) => (n.id === notificationId ? { ...n, read: true } : n))
+    );
+
+    if (firebaseUser) {
+      setDoc(
+        doc(db, 'community_notifications', notificationId),
+        { read: true },
+        { merge: true }
+      ).catch(() => {});
     }
   };
 
@@ -2775,17 +3260,157 @@ export default function App() {
     }
   };
 
+  // Consolidated set of known Admin UIDs so everything belonging to the Admin is hidden from regular users
+  const knownAdminUidsSet = useMemo(() => {
+    const set = getKnownAdminUids();
+    if (isAdmin && activeUserId) {
+      set.add(activeUserId);
+    }
+    registeredUsers.forEach((u) => {
+      if (u?.uid && isAdminIdentity(u)) {
+        set.add(u.uid);
+      }
+    });
+    Object.values(publicProfilesMap).forEach((p) => {
+      if (p?.uid && isAdminIdentity(p)) {
+        set.add(p.uid);
+      }
+    });
+    return set;
+  }, [isAdmin, activeUserId, registeredUsers, publicProfilesMap]);
+
+  const visiblePublicProfilesMap = useMemo(() => {
+    const filtered: Record<string, PublicProfile> = {};
+    Object.entries(publicProfilesMap).forEach(([uid, prof]) => {
+      if (
+        !isAdminIdentity(prof, knownAdminUidsSet) &&
+        !isAdminUid(uid, publicProfilesMap, registeredUsers, knownAdminUidsSet)
+      ) {
+        filtered[uid] = prof;
+      }
+    });
+    return filtered;
+  }, [publicProfilesMap, registeredUsers, knownAdminUidsSet]);
+
+  const visibleCommunityPosts = useMemo(() => {
+    if (isAdmin) return communityPosts;
+    return communityPosts.filter(
+      (p) =>
+        !isAdminPost(p, publicProfilesMap, registeredUsers, knownAdminUidsSet)
+    );
+  }, [
+    isAdmin,
+    communityPosts,
+    publicProfilesMap,
+    registeredUsers,
+    knownAdminUidsSet,
+  ]);
+
+  const visibleCommunityReplies = useMemo(() => {
+    if (isAdmin) return communityReplies;
+    return communityReplies.filter(
+      (r) =>
+        !isAdminReply(r, publicProfilesMap, registeredUsers, knownAdminUidsSet)
+    );
+  }, [
+    isAdmin,
+    communityReplies,
+    publicProfilesMap,
+    registeredUsers,
+    knownAdminUidsSet,
+  ]);
+
+  const visibleCommunityLikes = useMemo(() => {
+    if (isAdmin) return communityLikes;
+    return communityLikes.filter(
+      (l) =>
+        !isAdminLike(l, publicProfilesMap, registeredUsers, knownAdminUidsSet)
+    );
+  }, [
+    isAdmin,
+    communityLikes,
+    publicProfilesMap,
+    registeredUsers,
+    knownAdminUidsSet,
+  ]);
+
+  const visibleCommunityFollows = useMemo(() => {
+    if (isAdmin) return communityFollows;
+    return communityFollows.filter(
+      (f) =>
+        !isAdminFollow(f, publicProfilesMap, registeredUsers, knownAdminUidsSet)
+    );
+  }, [
+    isAdmin,
+    communityFollows,
+    publicProfilesMap,
+    registeredUsers,
+    knownAdminUidsSet,
+  ]);
+
+  const visibleBookReviews = useMemo(() => {
+    if (isAdmin) return bookReviews;
+    return bookReviews.filter(
+      (r) =>
+        !isAdminReview(r, publicProfilesMap, registeredUsers, knownAdminUidsSet)
+    );
+  }, [
+    isAdmin,
+    bookReviews,
+    publicProfilesMap,
+    registeredUsers,
+    knownAdminUidsSet,
+  ]);
+
+  const visibleCommunityNotifications = useMemo(() => {
+    if (isAdmin) return communityNotifications;
+    return communityNotifications.filter(
+      (n) =>
+        !isAdminNotification(
+          n,
+          publicProfilesMap,
+          registeredUsers,
+          knownAdminUidsSet
+        )
+    );
+  }, [
+    isAdmin,
+    communityNotifications,
+    publicProfilesMap,
+    registeredUsers,
+    knownAdminUidsSet,
+  ]);
+
+  const visibleDirectConversations = useMemo(() => {
+    if (isAdmin) return directConversations;
+    return directConversations.filter(
+      (c) =>
+        !isAdminConversation(
+          c,
+          publicProfilesMap,
+          registeredUsers,
+          knownAdminUidsSet
+        )
+    );
+  }, [
+    isAdmin,
+    directConversations,
+    publicProfilesMap,
+    registeredUsers,
+    knownAdminUidsSet,
+  ]);
+
   const unreadCommunityCount = useMemo(
     () =>
-      communityNotifications.filter(
+      visibleCommunityNotifications.filter(
         (n) => n.recipientId === activeUserId && !n.read
       ).length,
-    [communityNotifications, activeUserId]
+    [visibleCommunityNotifications, activeUserId]
   );
 
   const unreadMessagesCount = useMemo(() => {
     if (!activeUserId) return 0;
-    return directConversations.reduce((acc, conv) => {
+    return visibleDirectConversations.reduce((acc, conv) => {
       const countForMe = Number(conv.unreadCounts?.[activeUserId] || 0);
       if (countForMe > 0) return acc + countForMe;
       if (
@@ -2796,10 +3421,20 @@ export default function App() {
       }
       return acc;
     }, 0);
-  }, [directConversations, activeUserId]);
+  }, [visibleDirectConversations, activeUserId]);
 
   const handleOpenDirectMessages = (recipientUserId?: string) => {
-    if (recipientUserId && recipientUserId !== activeUserId) {
+    if (
+      recipientUserId &&
+      recipientUserId !== activeUserId &&
+      (isAdmin ||
+        !isAdminUid(
+          recipientUserId,
+          publicProfilesMap,
+          registeredUsers,
+          knownAdminUidsSet
+        ))
+    ) {
       setDmInitialRecipientId(recipientUserId);
     } else {
       setDmInitialRecipientId(null);
@@ -2917,7 +3552,10 @@ export default function App() {
   };
 
   // Navigation Handlers
+  const [highlightLoginFromRead, setHighlightLoginFromRead] = useState(false);
+
   const openBookDetail = (book: Book) => {
+    setHighlightLoginFromRead(false);
     if (
       activeView !== 'livro-detalhe' &&
       activeView !== 'leitor' &&
@@ -2932,6 +3570,7 @@ export default function App() {
   };
 
   const openBookDetailWithReviews = (book: Book) => {
+    setHighlightLoginFromRead(false);
     if (
       activeView !== 'livro-detalhe' &&
       activeView !== 'leitor' &&
@@ -2945,18 +3584,34 @@ export default function App() {
   };
 
   /**
-   * Ao clicar em [ LER LIVRO ], abre diretamente o leitor de PDF interno (provisório),
-   * sem precisar escolher opção no modal.
+   * Ao clicar em [ LER LIVRO ], verifica se o usuário está logado.
+   * Caso não esteja logado, redireciona para a tela de login (perfil) com o botão de login brilhando.
    */
   const openBookReader = (book: Book) => {
+    if (!firebaseUser && !userProfile) {
+      setSelectedBookId(book.id);
+      setHighlightLoginFromRead(true);
+      setActiveView('perfil');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
     handleSelectReadingFormat(book, 'pdf');
   };
 
   /**
    * Quando o leitor escolhe o formato (ex: format = "pdf") no modal "Como você quer ler?",
-   * abre a rota/componente correspondente ao formato escolhido.
+   * abre a rota/componente correspondente ao formato escolhido (exige login).
    */
   const handleSelectReadingFormat = (book: Book, format: ReadingFormat) => {
+    if (!firebaseUser && !userProfile) {
+      setFormatModalBookId(null);
+      setSelectedBookId(book.id);
+      setHighlightLoginFromRead(true);
+      setActiveView('perfil');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    setHighlightLoginFromRead(false);
     if (
       activeView !== 'livro-detalhe' &&
       activeView !== 'leitor' &&
@@ -2974,11 +3629,13 @@ export default function App() {
   };
 
   const handleNavigate = (view: ActiveView) => {
+    setHighlightLoginFromRead(false);
     setActiveView(view);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleSelectCategoryFromBox = (category: string) => {
+    setHighlightLoginFromRead(false);
     setSelectedCategory(category);
     setActiveView('categorias');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -3499,7 +4156,11 @@ export default function App() {
   );
 
   // Rota do Leitor de PDF interno do LIVROFLIX (format = "pdf")
-  if (activeView === 'leitor-pdf' && selectedBook) {
+  if (
+    activeView === 'leitor-pdf' &&
+    selectedBook &&
+    Boolean(firebaseUser || userProfile)
+  ) {
     return (
       <PdfReaderView
         book={selectedBook}
@@ -3515,7 +4176,11 @@ export default function App() {
   }
 
   // Full-screen comfortable Reader
-  if (activeView === 'leitor' && selectedBook) {
+  if (
+    activeView === 'leitor' &&
+    selectedBook &&
+    Boolean(firebaseUser || userProfile)
+  ) {
     return (
       <BookReader
         book={selectedBook}
@@ -3568,6 +4233,7 @@ export default function App() {
         myListCount={myListCount}
         unreadCommunityCount={unreadCommunityCount}
         unreadMessagesCount={unreadMessagesCount}
+        onOpenNotifications={() => setNotificationsModalOpen(true)}
         onOpenMessages={() => handleOpenDirectMessages()}
         categoriesList={effectiveCategoriesList}
         platformSettings={platformSettings}
@@ -3580,18 +4246,25 @@ export default function App() {
         {activeView === 'comunidade' && (
           <CommunityView
             books={activeBooks}
-            posts={communityPosts}
-            likes={communityLikes}
-            replies={communityReplies}
-            follows={communityFollows}
-            notifications={communityNotifications}
+            posts={visibleCommunityPosts}
+            likes={visibleCommunityLikes}
+            replies={visibleCommunityReplies}
+            follows={visibleCommunityFollows}
+            notifications={visibleCommunityNotifications}
             reports={communityReports}
-            publicProfilesMap={publicProfilesMap}
+            publicProfilesMap={visiblePublicProfilesMap}
             currentUserProfile={userProfile}
             isAuthenticated={Boolean(firebaseUser || userProfile)}
             isAdmin={isAdmin}
             unreadMessagesCount={unreadMessagesCount}
             onOpenMessages={handleOpenDirectMessages}
+            onOpenNotifications={() => setNotificationsModalOpen(true)}
+            initialPostId={communityInitialPostId}
+            onClearInitialPostId={() => setCommunityInitialPostId(null)}
+            initialInspectUserId={communityInitialInspectUserId}
+            onClearInitialInspectUserId={() =>
+              setCommunityInitialInspectUserId(null)
+            }
             onSelectBook={openBookDetail}
             onCreatePost={handleCreateCommunityPost}
             onDeletePost={handleDeleteCommunityPost}
@@ -3744,11 +4417,11 @@ export default function App() {
             onReadBook={openBookReader}
             onToggleList={handleToggleList}
             platformSettings={platformSettings}
-            publicProfilesMap={publicProfilesMap}
-            communityPosts={communityPosts}
-            communityLikes={communityLikes}
-            communityReplies={communityReplies}
-            communityFollows={communityFollows}
+            publicProfilesMap={visiblePublicProfilesMap}
+            communityPosts={visibleCommunityPosts}
+            communityLikes={visibleCommunityLikes}
+            communityReplies={visibleCommunityReplies}
+            communityFollows={visibleCommunityFollows}
             currentUserProfile={userProfile}
             isAuthenticated={Boolean(firebaseUser || userProfile)}
             isAdmin={isAdmin}
@@ -3768,7 +4441,7 @@ export default function App() {
             books={books}
             userLibrary={userLibrary}
             userProfile={userProfile}
-            bookReviews={bookReviews}
+            bookReviews={visibleBookReviews}
             initialTab="lista"
             onSelectBook={openBookDetail}
             onOpenBookReview={openBookDetailWithReviews}
@@ -3806,7 +4479,7 @@ export default function App() {
             books={books}
             userLibrary={userLibrary}
             userProfile={userProfile}
-            bookReviews={bookReviews}
+            bookReviews={visibleBookReviews}
             initialTab="lendo"
             onSelectBook={openBookDetail}
             onOpenBookReview={openBookDetailWithReviews}
@@ -3826,13 +4499,15 @@ export default function App() {
             isAdmin={isAdmin}
             books={books}
             userLibrary={userLibrary}
-            communityPosts={communityPosts}
-            communityLikes={communityLikes}
-            communityReplies={communityReplies}
-            communityFollows={communityFollows}
-            publicProfilesMap={publicProfilesMap}
+            communityPosts={visibleCommunityPosts}
+            communityLikes={visibleCommunityLikes}
+            communityReplies={visibleCommunityReplies}
+            communityFollows={visibleCommunityFollows}
+            publicProfilesMap={visiblePublicProfilesMap}
+            highlightGoogleLoginButton={highlightLoginFromRead}
             onSignIn={async () => {
               await signInWithGoogle();
+              setHighlightLoginFromRead(false);
             }}
             onDirectSignIn={handleDirectSignIn}
             onSignOut={() => {
@@ -3843,6 +4518,7 @@ export default function App() {
             onOpenAdmin={() => handleNavigate('admin')}
             onNavigateCommunity={() => handleNavigate('comunidade')}
             onUpdateOwnProfile={handleUpdateOwnProfile}
+            onCheckUsernameAvailability={checkUsernameAvailability}
             onSaveProfileCustomization={handleSaveProfileCustomization}
             onToggleProfileBadge={handleToggleProfileBadge}
             onToggleCommunityLike={handleToggleCommunityLike}
@@ -3862,9 +4538,9 @@ export default function App() {
             allBooks={books}
             userLibrary={userLibrary}
             userProfile={userProfile}
-            bookReviews={bookReviews}
-            publicProfilesMap={publicProfilesMap}
-            communityFollows={communityFollows}
+            bookReviews={visibleBookReviews}
+            publicProfilesMap={visiblePublicProfilesMap}
+            communityFollows={visibleCommunityFollows}
             isAdmin={isAdmin}
             initialScrollToReviews={scrollToReviewsOnDetail}
             onClearScrollToReviews={() => setScrollToReviewsOnDetail(false)}
@@ -3954,15 +4630,47 @@ export default function App() {
         userProfile={userProfile}
         isAuthenticated={Boolean(firebaseUser || userProfile)}
         onClose={() => setVipModalOpen(false)}
-        onToggleSubscription={handleTogglePremiumSubscription}
-        onOpenLogin={() => {
+        onTogglePremium={handleTogglePremiumSubscription}
+        onRequireAuth={() => {
           setVipModalOpen(false);
           handleNavigate('perfil');
         }}
-        onOpenCustomization={() => {
+        onOpenCustomizeProfile={() => {
           setVipModalOpen(false);
           handleNavigate('perfil');
         }}
+      />
+
+      {/* Sino de Notificações (Curtidas, Respostas, Menções e Seguidores) */}
+      <NotificationsModal
+        isOpen={notificationsModalOpen}
+        onClose={() => setNotificationsModalOpen(false)}
+        notifications={visibleCommunityNotifications}
+        currentUserProfile={userProfile}
+        isAuthenticated={Boolean(firebaseUser || userProfile)}
+        publicProfilesMap={visiblePublicProfilesMap}
+        onMarkAllRead={handleMarkCommunityNotificationsRead}
+        onMarkOneRead={handleMarkSingleNotificationRead}
+        onSelectNotification={(notif) => {
+          setNotificationsModalOpen(false);
+          if (notif.postId) {
+            setCommunityInitialPostId(notif.postId);
+            handleNavigate('comunidade');
+          } else if (
+            notif.actorId &&
+            (isAdmin ||
+              !isAdminUid(
+                notif.actorId,
+                publicProfilesMap,
+                registeredUsers,
+                knownAdminUidsSet
+              ))
+          ) {
+            setCommunityInitialInspectUserId(notif.actorId);
+            handleNavigate('comunidade');
+          }
+        }}
+        onRequireAuth={() => handleNavigate('perfil')}
       />
 
       {/* Mensagens Diretas (DM) Modal */}
@@ -3974,9 +4682,10 @@ export default function App() {
         }}
         currentUserProfile={userProfile}
         isAuthenticated={Boolean(firebaseUser || userProfile)}
-        conversations={directConversations}
-        publicProfilesMap={publicProfilesMap}
-        follows={communityFollows}
+        isAdmin={isAdmin}
+        conversations={visibleDirectConversations}
+        publicProfilesMap={visiblePublicProfilesMap}
+        follows={visibleCommunityFollows}
         initialRecipientId={dmInitialRecipientId}
         onClearInitialRecipient={() => setDmInitialRecipientId(null)}
         onToggleFollow={handleToggleCommunityFollow}

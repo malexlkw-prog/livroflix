@@ -25,6 +25,7 @@ import {
 import { BookCard } from './BookCard';
 import { CommunityPostCard, CreateReplyInput } from './CommunityView';
 import { ProfileFavoriteBooksShowcase } from './MyLibraryAndProfile';
+import { ProfileHighlightSection } from './ProfileHighlightSection';
 import {
   getProfileBackgroundStyle,
   ProfileDecorativeEffectLayer,
@@ -36,6 +37,12 @@ import {
   getMaxProfileFavoriteBooks,
   isUserPremium,
 } from '../utils/premiumUtils';
+import {
+  isAdminIdentity,
+  isAdminPost,
+  isAdminReply,
+  isAdminUid,
+} from '../utils/adminStealthUtils';
 
 interface SearchViewProps {
   books: Book[];
@@ -95,6 +102,14 @@ export const SearchView: React.FC<SearchViewProps> = ({
   const [showInspectedUserPosts, setShowInspectedUserPosts] = useState(false);
 
   const openInspectedUser = (uid: string | null) => {
+    if (
+      uid &&
+      !isAdmin &&
+      (isAdminUid(uid, publicProfilesMap) ||
+        isAdminIdentity(publicProfilesMap[uid]))
+    ) {
+      return;
+    }
     setInspectedUserId(uid);
     setShowInspectedUserPosts(false);
   };
@@ -106,11 +121,14 @@ export const SearchView: React.FC<SearchViewProps> = ({
     [books]
   );
 
-  // Build consolidated list of known users from public_profiles, posts, replies, and current user
+  // Build consolidated list of known users from public_profiles, posts, replies, and current user (excluding Admin for regular users)
   const allKnownProfiles = useMemo(() => {
     const map = new Map<string, PublicProfile>();
     Object.values(publicProfilesMap).forEach((prof) => {
       if (prof?.uid) {
+        if (!isAdmin && (isAdminIdentity(prof) || isAdminUid(prof.uid, publicProfilesMap))) {
+          return;
+        }
         map.set(prof.uid, {
           ...prof,
           username: (prof.username || 'leitor').replace(/^@+/, ''),
@@ -118,6 +136,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
       }
     });
     communityPosts.forEach((p) => {
+      if (!isAdmin && isAdminPost(p, publicProfilesMap)) return;
       if (!map.has(p.authorId)) {
         map.set(p.authorId, {
           uid: p.authorId,
@@ -130,6 +149,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
       }
     });
     communityReplies.forEach((r) => {
+      if (!isAdmin && isAdminReply(r, publicProfilesMap)) return;
       if (!map.has(r.authorId)) {
         map.set(r.authorId, {
           uid: r.authorId,
@@ -141,7 +161,11 @@ export const SearchView: React.FC<SearchViewProps> = ({
         });
       }
     });
-    if (currentUserProfile?.uid && !map.has(currentUserProfile.uid)) {
+    if (
+      currentUserProfile?.uid &&
+      !map.has(currentUserProfile.uid) &&
+      (isAdmin || !isAdminIdentity(currentUserProfile))
+    ) {
       const uname = (
         currentUserProfile.username ||
         currentUserProfile.displayName ||
@@ -160,7 +184,13 @@ export const SearchView: React.FC<SearchViewProps> = ({
       });
     }
     return Array.from(map.values());
-  }, [publicProfilesMap, communityPosts, communityReplies, currentUserProfile]);
+  }, [
+    publicProfilesMap,
+    communityPosts,
+    communityReplies,
+    currentUserProfile,
+    isAdmin,
+  ]);
 
   const myFollowingIds = useMemo(() => {
     const set = new Set<string>();
@@ -630,6 +660,15 @@ export const SearchView: React.FC<SearchViewProps> = ({
                         {inspectedProfile.bio}
                       </p>
                     )}
+                    <ProfileHighlightSection
+                      userId={inspectedProfile.uid}
+                      isOwner={Boolean(
+                        isAuthenticated &&
+                          currentUserProfile?.uid &&
+                          inspectedProfile.uid === currentUserProfile.uid
+                      )}
+                      align="center-sm-left"
+                    />
                     <div className="mt-3 flex items-center justify-center sm:justify-start gap-5 text-xs text-blue-200/80">
                       <button
                         type="button"

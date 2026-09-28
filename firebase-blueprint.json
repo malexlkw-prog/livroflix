@@ -357,6 +357,19 @@
         "hiddenFor": { "type": "array" }
       },
       "required": ["id", "conversationId", "senderId", "recipientId", "text", "createdAt", "read"]
+    },
+    "ProfileHighlight": {
+      "title": "ProfileHighlight",
+      "description": "Single active Instagram-style highlight on a user profile (maximum 1 highlight per user, up to 3 photos, 1st photo is coverUrl)",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 30 },
+        "photos": { "type": "array", "description": "1 to 3 image URLs / optimized data URLs" },
+        "coverUrl": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["name", "photos", "coverUrl", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -427,6 +440,10 @@
     "/users/{userId}/library/{bookId}": {
       "schema": { "$ref": "#/entities/UserBookItem" },
       "description": "Strict per-user reading progress, list, favorites, and ratings (readable by owner and admin)"
+    },
+    "/users/{userId}/highlights/{highlightId}": {
+      "schema": { "$ref": "#/entities/ProfileHighlight" },
+      "description": "Single active profile highlight per user at /users/{userId}/highlights/profile (up to 3 photos, 1st photo is cover)"
     }
   }
 }

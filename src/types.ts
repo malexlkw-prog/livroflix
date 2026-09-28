@@ -128,6 +128,14 @@ export interface ProfileCustomization {
   updatedAt?: string;
 }
 
+export interface ProfileHighlight {
+  name: string;
+  photos: string[];
+  coverUrl: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface UserProfile {
   uid: string;
   nome: string;
@@ -254,6 +262,8 @@ export interface PublicProfile {
   username: string;
   bio?: string;
   photoURL?: string;
+  role?: 'user' | 'admin';
+  isAdmin?: boolean;
   premium?: boolean;
   usernameColor?: string;
   profileCustomization?: ProfileCustomization;
@@ -316,10 +326,12 @@ export interface CommunityNotification {
   actorName: string;
   actorUsername: string;
   actorPhoto?: string;
+  actorPhotoURL?: string;
   type: CommunityNotificationType;
   postId?: string;
   replyId?: string;
   snippet?: string;
+  postSnippet?: string;
   read: boolean;
   createdAt: string;
 }

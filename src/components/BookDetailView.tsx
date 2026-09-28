@@ -40,10 +40,16 @@ import {
 } from '../utils/premiumUtils';
 import { downloadBookPdf } from '../utils/pdfUtils';
 import {
+  isAdminIdentity,
+  isAdminReview,
+  isAdminUid,
+} from '../utils/adminStealthUtils';
+import {
   ProfileBadgesShowcase,
   ProfileFavoriteBooksShowcase,
   generateDefaultUsername,
 } from './MyLibraryAndProfile';
+import { ProfileHighlightSection } from './ProfileHighlightSection';
 import {
   getProfileBackgroundStyle,
   ProfileDecorativeEffectLayer,
@@ -219,12 +225,16 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
   const isPremium = isUserPremium(userProfile);
   const isBookDownloadable = canBookBeDownloaded(book);
 
-  // Filter and sort reviews for this specific book (most recent first)
+  // Filter and sort reviews for this specific book (most recent first), excluding admin reviews for regular users
   const currentBookReviews = useMemo(() => {
     return bookReviews
-      .filter((r) => r.bookId === book.id)
+      .filter(
+        (r) =>
+          r.bookId === book.id &&
+          (isAdmin || !isAdminReview(r, publicProfilesMap))
+      )
       .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-  }, [bookReviews, book.id]);
+  }, [bookReviews, book.id, isAdmin, publicProfilesMap]);
 
   // Check if current user already has a review for this book
   const myExistingReview = useMemo(() => {
@@ -409,6 +419,13 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
   // Resolve inspected user profile for the Public Profile Modal
   const inspectedProfile = useMemo(() => {
     if (!inspectedUserId) return null;
+    if (
+      !isAdmin &&
+      (isAdminUid(inspectedUserId, publicProfilesMap) ||
+        isAdminIdentity(publicProfilesMap[inspectedUserId]))
+    ) {
+      return null;
+    }
     if (userProfile && inspectedUserId === userProfile.uid) {
       return {
         uid: userProfile.uid,
@@ -1321,6 +1338,14 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
                           {inspectedProfile.bio}
                         </p>
                       )}
+                      <ProfileHighlightSection
+                        userId={inspectedProfile.uid}
+                        isOwner={Boolean(
+                          userProfile?.uid &&
+                            inspectedProfile.uid === userProfile.uid
+                        )}
+                        align="center-sm-left"
+                      />
                       <div className="mt-3 flex items-center justify-center sm:justify-start gap-5 text-xs text-blue-200/80">
                         <span>
                           <strong className="font-mono-num text-white">
