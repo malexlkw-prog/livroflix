@@ -667,7 +667,7 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
                 </div>
               </div>
 
-              {/* Primary Action Buttons: LER LIVRO + Baixar PDF (when available) + ✍️ Fazer review + Simple Heart Button */}
+              {/* Primary Action Buttons: LER LIVRO + Simple Heart Button */}
               <div className="flex flex-wrap items-center gap-3.5">
                 <button
                   type="button"
@@ -677,44 +677,6 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
                   <Play className="w-5 h-5 fill-current" />
                   <span>{effectiveReadButtonText}</span>
                 </button>
-
-                {isBookDownloadable && (
-                  <button
-                    type="button"
-                    disabled={isDownloading}
-                    onClick={handleDownloadClick}
-                    title={
-                      isPremium
-                        ? 'Baixar livro em PDF'
-                        : 'Download disponível com LIVROFLIX Premium'
-                    }
-                    className={`inline-flex items-center justify-center gap-2.5 rounded-lg px-5 py-3.5 text-sm sm:text-base font-bold border transition-all cursor-pointer disabled:opacity-60 ${
-                      isPremium
-                        ? 'bg-[#071426] hover:bg-[#0B1E36] border-amber-400/40 text-amber-200 hover:text-amber-100 shadow-lg'
-                        : 'bg-blue-950/60 hover:bg-blue-900/60 border-amber-400/30 text-blue-100 hover:text-amber-200'
-                    }`}
-                  >
-                    {isDownloading ? (
-                      <>
-                        <Loader2 className="w-5 h-5 animate-spin text-amber-400" />
-                        <span>Baixando...</span>
-                      </>
-                    ) : downloadSuccess ? (
-                      <>
-                        <Check className="w-5 h-5 text-emerald-400" />
-                        <span>Baixado</span>
-                      </>
-                    ) : (
-                      <>
-                        <Download className="w-5 h-5 text-amber-400" />
-                        <span>Baixar PDF</span>
-                        {!isPremium && (
-                          <Crown className="w-4 h-4 text-amber-400 fill-amber-400/20 ml-0.5" />
-                        )}
-                      </>
-                    )}
-                  </button>
-                )}
 
                 {/* Simple Heart Icon Button */}
                 <button
@@ -737,12 +699,6 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
                   />
                 </button>
               </div>
-
-              {downloadError && (
-                <div className="rounded-xl bg-rose-500/10 border border-rose-500/30 px-4 py-3 text-xs sm:text-sm text-rose-200 max-w-xl">
-                  {downloadError}
-                </div>
-              )}
 
               {/* Synopsis Only (no "Sinopse da Obra" heading) */}
               <div className="pt-2">
