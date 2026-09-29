@@ -5,11 +5,13 @@ import {
   MessageCircle,
   AtSign,
   UserPlus,
+  UserCheck,
   CheckCheck,
   X,
   Crown,
 } from 'lucide-react';
 import {
+  CommunityFollow,
   CommunityNotification,
   PublicProfile,
   UserProfile,
@@ -23,12 +25,14 @@ interface NotificationsModalProps {
   isOpen: boolean;
   onClose: () => void;
   notifications: CommunityNotification[];
+  follows?: CommunityFollow[];
   publicProfilesMap: Record<string, PublicProfile>;
   currentUserProfile: UserProfile | null;
   isAuthenticated: boolean;
   onMarkAllRead: () => Promise<void>;
   onMarkOneRead?: (notificationId: string) => Promise<void>;
   onSelectNotification: (notification: CommunityNotification) => void;
+  onToggleFollow?: (targetUserId: string) => Promise<void>;
   onRequireAuth: () => void;
 }
 
@@ -58,17 +62,37 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
   isOpen,
   onClose,
   notifications,
+  follows = [],
   publicProfilesMap,
   currentUserProfile,
   isAuthenticated,
   onMarkAllRead,
   onMarkOneRead,
   onSelectNotification,
+  onToggleFollow,
   onRequireAuth,
 }) => {
   const [activeTab, setActiveTab] = useState<NotificationFilterTab>('all');
 
   const currentUserId = currentUserProfile?.uid || '';
+
+  const myFollowingIds = useMemo(() => {
+    const set = new Set<string>();
+    if (!currentUserId) return set;
+    follows.forEach((f) => {
+      if (f.followerId === currentUserId) set.add(f.followingId);
+    });
+    return set;
+  }, [follows, currentUserId]);
+
+  const myFollowerIds = useMemo(() => {
+    const set = new Set<string>();
+    if (!currentUserId) return set;
+    follows.forEach((f) => {
+      if (f.followingId === currentUserId) set.add(f.followerId);
+    });
+    return set;
+  }, [follows, currentUserId]);
 
   const myNotifications = useMemo(() => {
     if (!currentUserId) return [];
@@ -343,6 +367,54 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                       </p>
 
                       <div className="flex items-center gap-2 shrink-0">
+                        {notif.type === 'follow' &&
+                          onToggleFollow &&
+                          notif.actorId &&
+                          notif.actorId !== currentUserId && (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (!notif.read && onMarkOneRead) {
+                                  void onMarkOneRead(notif.id);
+                                }
+                                void onToggleFollow(notif.actorId);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  if (!notif.read && onMarkOneRead) {
+                                    void onMarkOneRead(notif.id);
+                                  }
+                                  void onToggleFollow(notif.actorId);
+                                }
+                              }}
+                              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold transition-all cursor-pointer ${
+                                myFollowingIds.has(notif.actorId)
+                                  ? 'bg-blue-950/80 border border-blue-400/30 text-blue-200 hover:border-rose-400/40 hover:text-rose-200'
+                                  : 'bg-[#2563EB] hover:bg-[#3B82F6] text-white shadow-sm'
+                              }`}
+                            >
+                              {myFollowingIds.has(notif.actorId) ? (
+                                <>
+                                  <UserCheck className="w-3 h-3" />
+                                  <span>Seguindo</span>
+                                </>
+                              ) : (
+                                <>
+                                  <UserPlus className="w-3 h-3" />
+                                  <span>
+                                    {myFollowerIds.has(notif.actorId) ||
+                                    notif.type === 'follow'
+                                      ? 'Seguir de volta'
+                                      : 'Seguir'}
+                                  </span>
+                                </>
+                              )}
+                            </span>
+                          )}
                         <span className="text-[11px] font-mono-num text-blue-300/65">
                           {formatRelativeNotificationTime(notif.createdAt)}
                         </span>

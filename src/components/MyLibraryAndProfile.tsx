@@ -21,6 +21,7 @@ import {
   AlertCircle,
   Check,
   MessageSquare,
+  MessageCircle,
   Palette,
   Settings,
   ArrowLeft,
@@ -1437,6 +1438,8 @@ interface ProfileViewProps {
   onDeleteCommunityPost?: (postId: string) => Promise<void>;
   onDeleteCommunityReply?: (replyId: string) => Promise<void>;
   onToggleCommunityFollow?: (targetUserId: string) => Promise<void>;
+  unreadMessagesCount?: number;
+  onOpenMessages?: (targetUserId?: string) => void;
   onOpenPremiumModal?: () => void;
   platformSettings?: PlatformSettings;
   highlightGoogleLoginButton?: boolean;
@@ -1468,6 +1471,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onDeleteCommunityPost,
   onDeleteCommunityReply,
   onToggleCommunityFollow,
+  unreadMessagesCount = 0,
+  onOpenMessages,
   onOpenPremiumModal,
   platformSettings,
   highlightGoogleLoginButton = false,
@@ -2629,7 +2634,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   )}
                 </div>
 
-                {/* Selos posicionados no lado superior direito da caixa do perfil (apenas ícones) */}
+                {/* Selos e botão de Mensagens posicionados no lado superior direito da caixa do perfil */}
                 <div className="flex flex-wrap items-center justify-center sm:justify-end gap-2.5 shrink-0">
                   <ProfileBadgesShowcase
                     unlockedBadgeIds={effectiveUnlockedBadges}
@@ -2638,6 +2643,22 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                     onToggleProfileBadge={onToggleProfileBadge}
                     customBadgeImages={platformSettings?.badgeImages}
                   />
+
+                  {onOpenMessages && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenMessages()}
+                      className="relative inline-flex items-center gap-2 rounded-xl bg-[#040D1A]/90 hover:bg-blue-500/20 border border-blue-400/35 px-4 py-2 text-xs sm:text-sm font-bold text-white transition-all cursor-pointer shadow-md"
+                    >
+                      <MessageCircle className="w-4 h-4 text-[#60A5FA]" />
+                      <span>Mensagens</span>
+                      {unreadMessagesCount > 0 && (
+                        <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-[#2563EB] px-1.5 text-[11px] font-mono-num font-bold text-white">
+                          {unreadMessagesCount > 99 ? '99+' : unreadMessagesCount}
+                        </span>
+                      )}
+                    </button>
+                  )}
 
                   {!isAuthenticated && (
                     <button

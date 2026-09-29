@@ -81,6 +81,8 @@ interface AdminDashboardProps {
   registeredUsers: UserProfile[];
   onSaveBook: (book: Book) => Promise<void>;
   onDeleteBook: (bookId: string) => Promise<void>;
+  deletedBooksUndoStack?: Book[];
+  onUndoDeleteBook?: () => Promise<Book | null>;
   onToggleFeatured: (book: Book) => Promise<void>;
   onMoveBookOrder: (book: Book, direction: 'up' | 'down') => Promise<void>;
   onAddCategory: (category: CustomCategory) => Promise<void>;
@@ -129,6 +131,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   registeredUsers,
   onSaveBook,
   onDeleteBook,
+  deletedBooksUndoStack = [],
+  onUndoDeleteBook,
   onToggleFeatured,
   onMoveBookOrder,
   onAddCategory,
@@ -189,10 +193,75 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const [savedBanner, setSavedBanner] = useState<string | null>(null);
+  const [undoDeleteBannerBook, setUndoDeleteBannerBook] = useState<Book | null>(
+    null
+  );
+  const [isRestoringBook, setIsRestoringBook] = useState<boolean>(false);
+  const undoBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const notifySaved = (msg: string) => {
     setSavedBanner(msg);
     setTimeout(() => setSavedBanner(null), 3000);
   };
+
+  const handleDeleteBookWithUndo = async (book: Book) => {
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    if (undoBannerTimerRef.current) {
+      clearTimeout(undoBannerTimerRef.current);
+    }
+    setUndoDeleteBannerBook(book);
+    undoBannerTimerRef.current = setTimeout(() => {
+      setUndoDeleteBannerBook(null);
+    }, 10000);
+    await onDeleteBook(book.id);
+  };
+
+  const handleTriggerUndoDelete = async () => {
+    if (isRestoringBook || !onUndoDeleteBook) return;
+    if (deletedBooksUndoStack.length === 0) return;
+    setIsRestoringBook(true);
+    try {
+      const restored = await onUndoDeleteBook();
+      if (restored) {
+        if (undoBannerTimerRef.current) {
+          clearTimeout(undoBannerTimerRef.current);
+        }
+        setUndoDeleteBannerBook(null);
+        notifySaved(`Livro "${restored.titulo}" restaurado com sucesso! (Ctrl+Z)`);
+      }
+    } finally {
+      setIsRestoringBook(false);
+    }
+  };
+
+  // Atalho de teclado Ctrl+Z (ou Cmd+Z) para desfazer exclusão de livro
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isUndoCombo =
+        (e.ctrlKey || e.metaKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === 'z';
+      if (!isUndoCombo) return;
+      if (deletedBooksUndoStack.length === 0) return;
+
+      const target = e.target as HTMLElement | null;
+      const tagName = target?.tagName?.toUpperCase();
+      const isEditableField =
+        tagName === 'TEXTAREA' ||
+        target?.isContentEditable ||
+        (tagName === 'INPUT' && activeTab !== 'catalogo');
+
+      if (isEditableField) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      handleTriggerUndoDelete();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [deletedBooksUndoStack, isRestoringBook, activeTab]);
 
   // --- TAB 1 & 2: BOOK CATALOG & MULTI-CHAPTER FORM ---
   const [catalogSearch, setCatalogSearch] = useState<string>('');
@@ -759,6 +828,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         )}
 
+        {/* Floating Undo Book Deletion Banner (Ctrl+Z) */}
+        {!savedBanner &&
+          (undoDeleteBannerBook || deletedBooksUndoStack.length > 0) &&
+          undoDeleteBannerBook && (
+            <div className="fixed bottom-6 right-6 z-50 flex flex-wrap items-center gap-3 rounded-xl bg-[#071426] border border-amber-400/40 px-5 py-3.5 text-sm text-white shadow-2xl">
+              <span className="text-blue-100">
+                Livro{' '}
+                <strong className="text-white">
+                  "{undoDeleteBannerBook.titulo}"
+                </strong>{' '}
+                excluído.
+              </span>
+              <button
+                type="button"
+                disabled={isRestoringBook}
+                onClick={handleTriggerUndoDelete}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-60 px-3.5 py-1.5 text-xs font-bold text-white transition-colors cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>
+                  {isRestoringBook ? 'Restaurando...' : 'Desfazer (Ctrl+Z)'}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setUndoDeleteBannerBook(null)}
+                className="text-blue-200/60 hover:text-white p-1 cursor-pointer"
+                title="Fechar aviso"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
         {/* Admin Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8 pb-6 border-b border-blue-400/15">
           <div>
@@ -775,6 +878,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            {deletedBooksUndoStack.length > 0 && (
+              <button
+                type="button"
+                disabled={isRestoringBook}
+                onClick={handleTriggerUndoDelete}
+                title={`Restaurar "${deletedBooksUndoStack[0].titulo}" (Ctrl+Z)`}
+                className="inline-flex items-center gap-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/35 px-4 py-3 text-xs sm:text-sm font-bold text-amber-200 transition-all cursor-pointer disabled:opacity-60"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>
+                  {isRestoringBook
+                    ? 'Restaurando...'
+                    : `Desfazer exclusão: "${deletedBooksUndoStack[0].titulo}" (Ctrl+Z)`}
+                </span>
+              </button>
+            )}
             <button
               type="button"
               onClick={startNewBook}
@@ -1029,9 +1148,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </button>
                             <button
                               type="button"
-                              onClick={() => onDeleteBook(book.id)}
+                              onClick={() => handleDeleteBookWithUndo(book)}
                               className="rounded-lg bg-rose-500/10 hover:bg-rose-500/25 p-2 text-rose-400 transition-colors cursor-pointer"
-                              title="Excluir livro"
+                              title="Excluir livro (Ctrl+Z para desfazer)"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>

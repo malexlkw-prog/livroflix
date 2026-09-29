@@ -3630,7 +3630,8 @@ export default function App() {
 
   const handleNavigate = (view: ActiveView) => {
     setHighlightLoginFromRead(false);
-    setActiveView(view);
+    const targetView = view === 'comunidade' ? 'perfil' : view;
+    setActiveView(targetView);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -3732,8 +3733,44 @@ export default function App() {
     }
   };
 
+  const [deletedBooksUndoStack, setDeletedBooksUndoStack] = useState<Book[]>(
+    () => {
+      try {
+        const raw = sessionStorage.getItem(
+          'livroflix_admin_deleted_books_undo_v1'
+        );
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? (parsed as Book[]) : [];
+      } catch {
+        return [];
+      }
+    }
+  );
+
+  const persistDeletedBooksUndoStack = (nextStack: Book[]) => {
+    setDeletedBooksUndoStack(nextStack);
+    try {
+      sessionStorage.setItem(
+        'livroflix_admin_deleted_books_undo_v1',
+        JSON.stringify(nextStack)
+      );
+    } catch {
+      // ignore storage quota errors
+    }
+  };
+
   const handleAdminDeleteBook = async (bookId: string) => {
     const targetBook = books.find((b) => b.id === bookId);
+    if (targetBook) {
+      const clonedBook: Book = JSON.parse(JSON.stringify(targetBook));
+      persistDeletedBooksUndoStack(
+        [
+          clonedBook,
+          ...deletedBooksUndoStack.filter((b) => b.id !== clonedBook.id),
+        ].slice(0, 20)
+      );
+    }
     setBooks((prev) => prev.filter((b) => b.id !== bookId));
     if (isAdmin) {
       try {
@@ -3747,6 +3784,14 @@ export default function App() {
         handleFirestoreError(error, OperationType.DELETE, `books/${bookId}`);
       }
     }
+  };
+
+  const handleAdminUndoDeleteBook = async (): Promise<Book | null> => {
+    if (!isAdmin || deletedBooksUndoStack.length === 0) return null;
+    const [bookToRestore, ...remainingStack] = deletedBooksUndoStack;
+    persistDeletedBooksUndoStack(remainingStack);
+    await handleAdminSaveBook(bookToRestore);
+    return bookToRestore;
   };
 
   const handleAdminToggleFeatured = async (book: Book) => {
@@ -4526,6 +4571,8 @@ export default function App() {
             onDeleteCommunityPost={handleDeleteCommunityPost}
             onDeleteCommunityReply={handleDeleteCommunityReply}
             onToggleCommunityFollow={handleToggleCommunityFollow}
+            unreadMessagesCount={unreadMessagesCount}
+            onOpenMessages={handleOpenDirectMessages}
             onOpenPremiumModal={() => setVipModalOpen(true)}
             platformSettings={platformSettings}
           />
@@ -4580,6 +4627,8 @@ export default function App() {
             }
             onSaveBook={handleAdminSaveBook}
             onDeleteBook={handleAdminDeleteBook}
+            deletedBooksUndoStack={deletedBooksUndoStack}
+            onUndoDeleteBook={handleAdminUndoDeleteBook}
             onToggleFeatured={handleAdminToggleFeatured}
             onMoveBookOrder={handleAdminMoveOrder}
             onAddCategory={handleAdminAddCategory}
@@ -4646,11 +4695,13 @@ export default function App() {
         isOpen={notificationsModalOpen}
         onClose={() => setNotificationsModalOpen(false)}
         notifications={visibleCommunityNotifications}
+        follows={visibleCommunityFollows}
         currentUserProfile={userProfile}
         isAuthenticated={Boolean(firebaseUser || userProfile)}
         publicProfilesMap={visiblePublicProfilesMap}
         onMarkAllRead={handleMarkCommunityNotificationsRead}
         onMarkOneRead={handleMarkSingleNotificationRead}
+        onToggleFollow={handleToggleCommunityFollow}
         onSelectNotification={(notif) => {
           setNotificationsModalOpen(false);
           if (notif.postId) {
@@ -4727,13 +4778,15 @@ export default function App() {
             >
               {platformSettings.navMyListText || 'Minha lista'}
             </button>
-            <button
-              type="button"
-              onClick={() => handleNavigate('comunidade')}
-              className="hover:text-[#60A5FA] transition-colors cursor-pointer"
-            >
-              Comunidade
-            </button>
+            {false && (
+              <button
+                type="button"
+                onClick={() => handleNavigate('comunidade')}
+                className="hover:text-[#60A5FA] transition-colors cursor-pointer"
+              >
+                Comunidade
+              </button>
+            )}
           </div>
         </div>
       </footer>

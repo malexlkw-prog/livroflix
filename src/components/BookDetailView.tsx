@@ -501,6 +501,15 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
     );
   }, [communityFollows, userProfile?.uid]);
 
+  const myFollowerIds = useMemo(() => {
+    if (!userProfile?.uid) return new Set<string>();
+    return new Set(
+      communityFollows
+        .filter((f) => f.followingId === userProfile.uid)
+        .map((f) => f.followerId)
+    );
+  }, [communityFollows, userProfile?.uid]);
+
   const inspectedFollowersCount = useMemo(() => {
     if (!inspectedUserId) return 0;
     return communityFollows.filter((f) => f.followingId === inspectedUserId)
@@ -1351,7 +1360,11 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
                               ) : (
                                 <>
                                   <UserPlus className="w-4 h-4" />
-                                  <span>Seguir</span>
+                                  <span>
+                                    {myFollowerIds.has(inspectedProfile.uid)
+                                      ? 'Seguir de volta'
+                                      : 'Seguir'}
+                                  </span>
                                 </>
                               )}
                             </button>

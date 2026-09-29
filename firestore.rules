@@ -552,6 +552,7 @@ service cloud.firestore {
         (!('unreadBy' in data) || (data.unreadBy is list && data.unreadBy.size() <= 2)) &&
         (!('unreadCounts' in data) || data.unreadCounts is map) &&
         (!('participantProfiles' in data) || data.participantProfiles is map) &&
+        (!('typingAt' in data) || data.typingAt is map) &&
         (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
         (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
     }
@@ -587,21 +588,30 @@ service cloud.firestore {
           request.resource.data.createdAt is string &&
           request.resource.data.createdAt.size() <= 64 &&
           request.resource.data.read is bool &&
+          (!('deleted' in request.resource.data) || request.resource.data.deleted is bool) &&
           (!('hiddenFor' in request.resource.data) || (request.resource.data.hiddenFor is list && request.resource.data.hiddenFor.size() <= 2));
         allow update: if isConversationParticipant(conversationId) &&
           request.resource.data.senderId == resource.data.senderId &&
           request.resource.data.recipientId == resource.data.recipientId &&
           request.resource.data.conversationId == resource.data.conversationId &&
-          request.resource.data.text == resource.data.text &&
           request.resource.data.createdAt == resource.data.createdAt && (
             // Participant marking message as read
             (
+              request.resource.data.text == resource.data.text &&
               request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']) &&
               request.resource.data.read is bool
+            ) ||
+            // Sender deleting their own message for both users ("Mensagem apagada")
+            (
+              resource.data.senderId == request.auth.uid &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'deleted']) &&
+              request.resource.data.text == 'Mensagem apagada' &&
+              (!('deleted' in request.resource.data) || request.resource.data.deleted is bool)
             ) ||
             // Sender hiding their own message from their own view
             (
               resource.data.senderId == request.auth.uid &&
+              request.resource.data.text == resource.data.text &&
               request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hiddenFor']) &&
               request.resource.data.hiddenFor is list &&
               request.resource.data.hiddenFor.size() <= 2

@@ -72,6 +72,7 @@ export const Header: React.FC<HeaderProps> = ({
   const navDownloadsText = platformSettings?.navDownloadsText || 'Downloads';
   const navCategoriesText = platformSettings?.navCategoriesText || 'Categorias';
   const showDownloadsTab = false;
+  const showCommunityTab = false;
   const showCategoriesTab = platformSettings?.showCategoriesTab !== false;
   const showSearchButton = platformSettings?.showSearchButton !== false;
   const [scrolled, setScrolled] = useState(false);
@@ -207,20 +208,22 @@ export const Header: React.FC<HeaderProps> = ({
                 </div>
               )}
 
-              <button
-                type="button"
-                onClick={() => {
-                  setCatDropdownOpen(false);
-                  onNavigate('comunidade');
-                }}
-                className={`text-sm font-medium transition-colors flex items-center gap-1.5 cursor-pointer ${
-                  activeView === 'comunidade' && !catDropdownOpen
-                    ? 'text-[#60A5FA] font-bold'
-                    : 'text-blue-100/80 hover:text-white'
-                }`}
-              >
-                <span>Comunidade</span>
-              </button>
+              {showCommunityTab && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCatDropdownOpen(false);
+                    onNavigate('comunidade');
+                  }}
+                  className={`text-sm font-medium transition-colors flex items-center gap-1.5 cursor-pointer ${
+                    activeView === 'comunidade' && !catDropdownOpen
+                      ? 'text-[#60A5FA] font-bold'
+                      : 'text-blue-100/80 hover:text-white'
+                  }`}
+                >
+                  <span>Comunidade</span>
+                </button>
+              )}
 
               {isAdmin && (
                 <button
@@ -284,13 +287,13 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             )}
 
-            {/* Ícone de Mensagens Diretas (💬) — Oculto no celular (fica apenas na Comunidade) */}
-            {onOpenMessages && (
+            {/* Ícone de Mensagens Diretas (💬) — Movido para a aba de Perfil */}
+            {false && onOpenMessages && (
               <button
                 type="button"
                 onClick={() => {
                   setCatDropdownOpen(false);
-                  onOpenMessages();
+                  onOpenMessages?.();
                 }}
                 aria-label="Mensagens"
                 title="Mensagens"
@@ -439,20 +442,22 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={() => {
-              setCatDropdownOpen(false);
-              onNavigate('comunidade');
-            }}
-            className={`whitespace-nowrap font-medium transition-colors flex items-center gap-1 cursor-pointer ${
-              activeView === 'comunidade' && !catDropdownOpen
-                ? 'text-[#60A5FA] font-bold'
-                : 'text-blue-200/80'
-            }`}
-          >
-            <span>Comunidade</span>
-          </button>
+          {showCommunityTab && (
+            <button
+              type="button"
+              onClick={() => {
+                setCatDropdownOpen(false);
+                onNavigate('comunidade');
+              }}
+              className={`whitespace-nowrap font-medium transition-colors flex items-center gap-1 cursor-pointer ${
+                activeView === 'comunidade' && !catDropdownOpen
+                  ? 'text-[#60A5FA] font-bold'
+                  : 'text-blue-200/80'
+              }`}
+            >
+              <span>Comunidade</span>
+            </button>
+          )}
         </nav>
 
         {/* CAIXA DE CATEGORIAS DE LIVROS */}

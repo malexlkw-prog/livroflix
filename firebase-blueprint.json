@@ -337,6 +337,7 @@
         "unreadBy": { "type": "array" },
         "unreadCounts": { "type": "object" },
         "participantProfiles": { "type": "object" },
+        "typingAt": { "type": "object" },
         "createdAt": { "type": "string" },
         "updatedAt": { "type": "string" }
       },
@@ -354,6 +355,7 @@
         "text": { "type": "string", "minLength": 1, "maxLength": 1000 },
         "createdAt": { "type": "string" },
         "read": { "type": "boolean" },
+        "deleted": { "type": "boolean" },
         "hiddenFor": { "type": "array" }
       },
       "required": ["id", "conversationId", "senderId", "recipientId", "text", "createdAt", "read"]

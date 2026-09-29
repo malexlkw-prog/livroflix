@@ -385,6 +385,19 @@ export const CommunityPostCard: React.FC<CommunityPostCardProps> = ({
     [follows, currentUserId, isOwnPost, post.authorId]
   );
 
+  const isAuthorFollowingMe = useMemo(
+    () =>
+      Boolean(
+        currentUserId &&
+          !isOwnPost &&
+          follows.some(
+            (f) =>
+              f.followerId === post.authorId && f.followingId === currentUserId
+          )
+      ),
+    [follows, currentUserId, isOwnPost, post.authorId]
+  );
+
   const typedReplyMention = useMemo(
     () => getTypedMentionMatch(replyText, replyCursorPos),
     [replyText, replyCursorPos]
@@ -598,7 +611,7 @@ export const CommunityPostCard: React.FC<CommunityPostCardProps> = ({
               ) : (
                 <>
                   <UserPlus className="w-3.5 h-3.5" />
-                  <span>Seguir</span>
+                  <span>{isAuthorFollowingMe ? 'Seguir de volta' : 'Seguir'}</span>
                 </>
               )}
             </button>
@@ -764,12 +777,13 @@ export const CommunityPostCard: React.FC<CommunityPostCardProps> = ({
         </div>
       )}
 
-      {/* Interaction Bar: ❤️ Curtidas & 💬 Respostas ONLY (no reposts, no saves, no shares) */}
+      {/* Interaction Bar: ❤️ & 💬 ONLY */}
       <div className="mt-4 pt-3 border-t border-blue-400/15 flex items-center gap-6">
         <button
           type="button"
           onClick={handleLikeClick}
-          className={`inline-flex items-center gap-2 text-xs sm:text-sm font-semibold transition-colors cursor-pointer ${
+          aria-label="Curtidas"
+          className={`inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold transition-colors cursor-pointer ${
             isLikedByMe
               ? 'text-rose-500'
               : 'text-blue-200/75 hover:text-rose-400'
@@ -781,7 +795,6 @@ export const CommunityPostCard: React.FC<CommunityPostCardProps> = ({
             }`}
           />
           <span className="font-mono-num">{postLikes.length}</span>
-          <span>{postLikes.length === 1 ? 'Curtida' : 'Curtidas'}</span>
         </button>
 
         <button
@@ -793,7 +806,8 @@ export const CommunityPostCard: React.FC<CommunityPostCardProps> = ({
               setRepliesOpen((prev) => !prev);
             }
           }}
-          className={`inline-flex items-center gap-2 text-xs sm:text-sm font-semibold transition-colors cursor-pointer ${
+          aria-label="Respostas"
+          className={`inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold transition-colors cursor-pointer ${
             isDetailView || repliesOpen
               ? 'text-[#60A5FA]'
               : 'text-blue-200/75 hover:text-[#60A5FA]'
@@ -801,7 +815,6 @@ export const CommunityPostCard: React.FC<CommunityPostCardProps> = ({
         >
           <MessageCircle className="w-4 h-4" />
           <span className="font-mono-num">{postReplies.length}</span>
-          <span>{postReplies.length === 1 ? 'Resposta' : 'Respostas'}</span>
         </button>
       </div>
 
@@ -1265,6 +1278,15 @@ export const CommunityView: React.FC<CommunityViewProps> = ({
       follows
         .filter((f) => f.followerId === currentUserId)
         .map((f) => f.followingId)
+    );
+  }, [follows, currentUserId]);
+
+  const myFollowerIds = useMemo(() => {
+    if (!currentUserId) return new Set<string>();
+    return new Set(
+      follows
+        .filter((f) => f.followingId === currentUserId)
+        .map((f) => f.followerId)
     );
   }, [follows, currentUserId]);
 
@@ -2610,7 +2632,11 @@ export const CommunityView: React.FC<CommunityViewProps> = ({
                           ) : (
                             <>
                               <UserPlus className="w-4 h-4" />
-                              <span>Seguir</span>
+                              <span>
+                                {myFollowerIds.has(inspectedProfile.uid)
+                                  ? 'Seguir de volta'
+                                  : 'Seguir'}
+                              </span>
                             </>
                           )}
                         </button>

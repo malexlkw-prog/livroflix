@@ -179,9 +179,42 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
   const [sendError, setSendError] = useState<string | null>(null);
   const [messages, setMessages] = useState<DirectMessage[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [typingCheckTick, setTypingCheckTick] = useState(0);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTypingWriteMsRef = useRef<number>(0);
+  const activeTypingMetaRef = useRef<{
+    convId: string;
+    uid: string;
+    participants: string[];
+  } | null>(null);
+
+  const stopMyTyping = (
+    convId: string,
+    uid: string,
+    participants: string[]
+  ) => {
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+    lastTypingWriteMsRef.current = 0;
+    activeTypingMetaRef.current = null;
+    if (!convId || !uid || participants.length !== 2) return;
+    setDoc(
+      doc(db, 'conversations', convId),
+      {
+        id: convId,
+        participants,
+        typingAt: {
+          [uid]: '',
+        },
+      },
+      { merge: true }
+    ).catch(() => {});
+  };
 
   // Sync initialRecipientId when opening from a user's public profile ("Mensagem")
   useEffect(() => {
@@ -276,6 +309,7 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
           Array.isArray(c.participants) &&
           c.participants.includes(currentUserId) &&
           c.participants.length === 2 &&
+          Boolean(c.lastMessage || c.lastMessageAt) &&
           (isAdmin || !isAdminConversation(c, publicProfilesMap))
       )
       .sort((a, b) =>
@@ -357,8 +391,8 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
 
   const activeConversation = useMemo(() => {
     if (!activeConversationId) return undefined;
-    return sortedConversations.find((c) => c.id === activeConversationId);
-  }, [sortedConversations, activeConversationId]);
+    return conversations.find((c) => c.id === activeConversationId);
+  }, [conversations, activeConversationId]);
 
   const activeRecipientProfile = useMemo(() => {
     if (!selectedOtherUserId) return null;
@@ -372,7 +406,7 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
     return (
       myFollowingIds.has(selectedOtherUserId) ||
       myFollowerIds.has(selectedOtherUserId) ||
-      Boolean(activeConversation)
+      Boolean(activeConversation?.lastMessage || activeConversation?.lastMessageAt)
     );
   }, [
     currentUserId,
@@ -381,6 +415,110 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
     myFollowerIds,
     activeConversation,
   ]);
+
+  // Clear typing status when switching conversations, closing modal, or unmounting
+  useEffect(() => {
+    if (!isOpen || !activeConversationId) {
+      if (activeTypingMetaRef.current) {
+        const { convId, uid, participants } = activeTypingMetaRef.current;
+        stopMyTyping(convId, uid, participants);
+      }
+      return;
+    }
+    if (
+      activeTypingMetaRef.current &&
+      activeTypingMetaRef.current.convId !== activeConversationId
+    ) {
+      const { convId, uid, participants } = activeTypingMetaRef.current;
+      stopMyTyping(convId, uid, participants);
+    }
+  }, [isOpen, activeConversationId]);
+
+  useEffect(() => {
+    return () => {
+      if (activeTypingMetaRef.current) {
+        const { convId, uid, participants } = activeTypingMetaRef.current;
+        stopMyTyping(convId, uid, participants);
+      }
+    };
+  }, []);
+
+  const handleMessageInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const nextVal = e.target.value.slice(0, DM_MAX_LENGTH);
+    setMessageText(nextVal);
+
+    if (
+      !isAuthenticated ||
+      !currentUserId ||
+      !selectedOtherUserId ||
+      !activeConversationId ||
+      !canMessageSelectedUser
+    ) {
+      return;
+    }
+
+    const sortedParticipants = [currentUserId, selectedOtherUserId].sort();
+
+    if (nextVal.trim().length === 0) {
+      if (activeTypingMetaRef.current) {
+        stopMyTyping(activeConversationId, currentUserId, sortedParticipants);
+      }
+      return;
+    }
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    typingTimeoutRef.current = setTimeout(() => {
+      stopMyTyping(activeConversationId, currentUserId, sortedParticipants);
+    }, 2500);
+
+    const nowMs = Date.now();
+    if (
+      !activeTypingMetaRef.current ||
+      activeTypingMetaRef.current.convId !== activeConversationId ||
+      nowMs - lastTypingWriteMsRef.current > 1800
+    ) {
+      lastTypingWriteMsRef.current = nowMs;
+      activeTypingMetaRef.current = {
+        convId: activeConversationId,
+        uid: currentUserId,
+        participants: sortedParticipants,
+      };
+      setDoc(
+        doc(db, 'conversations', activeConversationId),
+        {
+          id: activeConversationId,
+          participants: sortedParticipants,
+          typingAt: {
+            [currentUserId]: new Date(nowMs).toISOString(),
+          },
+        },
+        { merge: true }
+      ).catch(() => {});
+    }
+  };
+
+  // Real-time check whether the other participant is currently typing
+  const otherTypingIso =
+    selectedOtherUserId && activeConversation?.typingAt
+      ? activeConversation.typingAt[selectedOtherUserId] || ''
+      : '';
+
+  useEffect(() => {
+    if (!otherTypingIso) return;
+    const interval = setInterval(() => {
+      setTypingCheckTick((t) => t + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [otherTypingIso]);
+
+  const isOtherUserTyping = useMemo(() => {
+    if (!otherTypingIso) return false;
+    const ts = new Date(otherTypingIso).getTime();
+    if (Number.isNaN(ts)) return false;
+    return Date.now() - ts < 5000;
+  }, [otherTypingIso, typingCheckTick]);
 
   // Real-time listener for messages in the active conversation
   useEffect(() => {
@@ -495,7 +633,7 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
     ).catch(() => {});
   }, [isOpen, currentUserId, activeConversation, activeConversationId]);
 
-  // Visible messages (excluding messages the sender deleted from their own view)
+  // Visible messages in conversation history
   const visibleMessages = useMemo(() => {
     if (!currentUserId) return [];
     return messages.filter(
@@ -504,14 +642,19 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
     );
   }, [messages, currentUserId]);
 
-  // Auto-scroll to bottom when messages change
+  // Auto-scroll to bottom when messages or typing indicator change
   useEffect(() => {
     if (!isOpen || !selectedOtherUserId) return;
     const timer = setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, 60);
     return () => clearTimeout(timer);
-  }, [isOpen, selectedOtherUserId, visibleMessages.length]);
+  }, [
+    isOpen,
+    selectedOtherUserId,
+    visibleMessages.length,
+    isOtherUserTyping,
+  ]);
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -539,6 +682,13 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
       setSendError(`A mensagem pode ter no máximo ${DM_MAX_LENGTH} caracteres.`);
       return;
     }
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+    lastTypingWriteMsRef.current = 0;
+    activeTypingMetaRef.current = null;
 
     setSendError(null);
     setIsSending(true);
@@ -593,6 +743,10 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
           photoURL: activeRecipientProfile.photoURL,
         },
       },
+      typingAt: {
+        ...(activeConversation?.typingAt || {}),
+        [currentUserId]: '',
+      },
       createdAt: activeConversation?.createdAt || nowIso,
       updatedAt: nowIso,
     });
@@ -645,28 +799,46 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
     }
   };
 
-  // Allow sender to hide/delete their own message from their own view
-  const handleHideOwnMessageFromMyView = async (msg: DirectMessage) => {
+  // Allow sender to delete their own message (replaces content with "Mensagem apagada" for both users)
+  const handleDeleteOwnMessage = async (msg: DirectMessage) => {
     if (
       !currentUserId ||
       !activeConversationId ||
-      msg.senderId !== currentUserId
+      msg.senderId !== currentUserId ||
+      msg.deleted ||
+      msg.text === 'Mensagem apagada'
     ) {
       return;
     }
-    const existingHidden = Array.isArray(msg.hiddenFor) ? msg.hiddenFor : [];
-    if (existingHidden.includes(currentUserId)) return;
-    const nextHidden = [...existingHidden, currentUserId];
 
     try {
       await updateDoc(
         doc(db, 'conversations', activeConversationId, 'messages', msg.id),
         {
-          hiddenFor: nextHidden,
+          text: 'Mensagem apagada',
+          deleted: true,
         }
       );
-    } catch {
-      // ignore
+
+      const latestMsg =
+        visibleMessages.length > 0
+          ? visibleMessages[visibleMessages.length - 1]
+          : null;
+      if (latestMsg && latestMsg.id === msg.id && activeConversation) {
+        await setDoc(
+          doc(db, 'conversations', activeConversationId),
+          {
+            lastMessage: 'Mensagem apagada',
+          },
+          { merge: true }
+        );
+      }
+    } catch (error) {
+      handleFirestoreError(
+        error,
+        OperationType.UPDATE,
+        `conversations/${activeConversationId}/messages/${msg.id}`
+      );
     }
   };
 
@@ -1066,7 +1238,7 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
                         <Loader2 className="w-4 h-4 animate-spin text-[#60A5FA]" />
                         <span>Carregando mensagens...</span>
                       </div>
-                    ) : visibleMessages.length === 0 ? (
+                    ) : visibleMessages.length === 0 && !isOtherUserTyping ? (
                       <div className="flex flex-col items-center justify-center h-full text-center py-10 space-y-2">
                         <p className="font-display text-lg font-bold text-white">
                           Conversa privada com @{activeRecipientProfile.username}
@@ -1076,67 +1248,90 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
                         </p>
                       </div>
                     ) : (
-                      visibleMessages.map((msg, index) => {
-                        const isMine = msg.senderId === currentUserId;
-                        const prevMsg =
-                          index > 0 ? visibleMessages[index - 1] : null;
-                        const showDateDivider =
-                          !prevMsg ||
-                          getDateKey(prevMsg.createdAt) !==
-                            getDateKey(msg.createdAt);
+                      <>
+                        {visibleMessages.map((msg, index) => {
+                          const isMine = msg.senderId === currentUserId;
+                          const isDeleted =
+                            Boolean(msg.deleted) ||
+                            msg.text === 'Mensagem apagada';
+                          const prevMsg =
+                            index > 0 ? visibleMessages[index - 1] : null;
+                          const showDateDivider =
+                            !prevMsg ||
+                            getDateKey(prevMsg.createdAt) !==
+                              getDateKey(msg.createdAt);
 
-                        return (
-                          <React.Fragment key={msg.id}>
-                            {showDateDivider && (
-                              <div className="flex items-center justify-center my-3">
-                                <span className="rounded-full bg-[#071426] border border-blue-400/20 px-3 py-0.5 text-[11px] font-medium text-blue-200/75">
-                                  {formatDateSeparatorLabel(msg.createdAt)}
-                                </span>
-                              </div>
-                            )}
-
-                            <div
-                              className={`flex items-end gap-2 group ${
-                                isMine ? 'justify-end' : 'justify-start'
-                              }`}
-                            >
-                              {isMine && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleHideOwnMessageFromMyView(msg)
-                                  }
-                                  title="Apagar mensagem para mim"
-                                  className="opacity-0 group-hover:opacity-100 focus:opacity-100 rounded-full p-1.5 text-blue-300/50 hover:text-rose-400 hover:bg-rose-500/10 transition-all cursor-pointer"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                          return (
+                            <React.Fragment key={msg.id}>
+                              {showDateDivider && (
+                                <div className="flex items-center justify-center my-3">
+                                  <span className="rounded-full bg-[#071426] border border-blue-400/20 px-3 py-0.5 text-[11px] font-medium text-blue-200/75">
+                                    {formatDateSeparatorLabel(msg.createdAt)}
+                                  </span>
+                                </div>
                               )}
 
                               <div
-                                className={`max-w-[82%] sm:max-w-[70%] rounded-2xl px-4 py-2.5 shadow-md ${
-                                  isMine
-                                    ? 'bg-[#2563EB] text-white rounded-br-sm'
-                                    : 'bg-[#071426] border border-blue-400/20 text-blue-50 rounded-bl-sm'
+                                className={`flex items-end gap-2 group ${
+                                  isMine ? 'justify-end' : 'justify-start'
                                 }`}
                               >
-                                <p className="text-sm leading-relaxed whitespace-pre-line break-words">
-                                  {msg.text}
-                                </p>
+                                {isMine && !isDeleted && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteOwnMessage(msg)}
+                                    title="Apagar mensagem"
+                                    aria-label="Apagar mensagem"
+                                    className="opacity-70 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 rounded-full p-1.5 text-blue-300/50 hover:text-rose-400 hover:bg-rose-500/10 transition-all cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+
                                 <div
-                                  className={`mt-1 flex items-center justify-end gap-1.5 text-[10px] font-mono-num ${
+                                  className={`max-w-[82%] sm:max-w-[70%] rounded-2xl px-4 py-2.5 shadow-md ${
                                     isMine
-                                      ? 'text-blue-100/80'
-                                      : 'text-blue-300/60'
+                                      ? 'bg-[#2563EB] text-white rounded-br-sm'
+                                      : 'bg-[#071426] border border-blue-400/20 text-blue-50 rounded-bl-sm'
                                   }`}
                                 >
-                                  <span>{formatMessageTime(msg.createdAt)}</span>
+                                  <p
+                                    className={`text-sm leading-relaxed whitespace-pre-line break-words ${
+                                      isDeleted ? 'italic opacity-75' : ''
+                                    }`}
+                                  >
+                                    {isDeleted ? 'Mensagem apagada' : msg.text}
+                                  </p>
+                                  <div
+                                    className={`mt-1 flex items-center justify-end gap-1.5 text-[10px] font-mono-num ${
+                                      isMine
+                                        ? 'text-blue-100/80'
+                                        : 'text-blue-300/60'
+                                    }`}
+                                  >
+                                    <span>
+                                      {formatMessageTime(msg.createdAt)}
+                                    </span>
+                                  </div>
                                 </div>
                               </div>
+                            </React.Fragment>
+                          );
+                        })}
+
+                        {isOtherUserTyping && (
+                          <div className="flex items-end gap-2 justify-start">
+                            <div
+                              className="rounded-2xl rounded-bl-sm bg-[#071426] border border-blue-400/25 px-4 py-2.5 text-blue-100 shadow-md flex items-center"
+                              aria-label="Digitando"
+                            >
+                              <span className="text-base font-bold tracking-widest leading-none text-[#60A5FA] animate-pulse">
+                                ...
+                              </span>
                             </div>
-                          </React.Fragment>
-                        );
-                      })
+                          </div>
+                        )}
+                      </>
                     )}
                     <div ref={messagesEndRef} />
                   </div>
@@ -1188,11 +1383,7 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
                           type="text"
                           maxLength={DM_MAX_LENGTH}
                           value={messageText}
-                          onChange={(e) =>
-                            setMessageText(
-                              e.target.value.slice(0, DM_MAX_LENGTH)
-                            )
-                          }
+                          onChange={handleMessageInputChange}
                           placeholder="Escreva uma mensagem..."
                           className="flex-1 rounded-xl bg-[#040D1A] border border-blue-400/25 px-4 py-3 text-sm text-white placeholder-blue-300/45 focus:border-[#60A5FA] focus:outline-none transition-colors"
                         />

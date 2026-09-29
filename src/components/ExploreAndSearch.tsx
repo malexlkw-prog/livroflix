@@ -201,6 +201,15 @@ export const SearchView: React.FC<SearchViewProps> = ({
     return set;
   }, [communityFollows, currentUserId]);
 
+  const myFollowerIds = useMemo(() => {
+    const set = new Set<string>();
+    if (!currentUserId) return set;
+    communityFollows.forEach((f) => {
+      if (f.followingId === currentUserId) set.add(f.followerId);
+    });
+    return set;
+  }, [communityFollows, currentUserId]);
+
   const matchedUsers = useMemo(() => {
     const raw = query.trim().toLowerCase();
     if (!raw) return [] as PublicProfile[];
@@ -396,6 +405,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
                 {matchedUsers.map((prof) => {
                   const isOwn = prof.uid === currentUserId;
                   const isFollowing = myFollowingIds.has(prof.uid);
+                  const followsMe = myFollowerIds.has(prof.uid);
                   const followersCount = communityFollows.filter(
                     (f) => f.followingId === prof.uid
                   ).length;
@@ -466,7 +476,9 @@ export const SearchView: React.FC<SearchViewProps> = ({
                           ) : (
                             <>
                               <UserPlus className="w-3.5 h-3.5" />
-                              <span>Seguir</span>
+                              <span>
+                                {followsMe ? 'Seguir de volta' : 'Seguir'}
+                              </span>
                             </>
                           )}
                         </button>
@@ -725,7 +737,11 @@ export const SearchView: React.FC<SearchViewProps> = ({
                       ) : (
                         <>
                           <UserPlus className="w-4 h-4" />
-                          <span>Seguir</span>
+                          <span>
+                            {myFollowerIds.has(inspectedProfile.uid)
+                              ? 'Seguir de volta'
+                              : 'Seguir'}
+                          </span>
                         </>
                       )}
                     </button>

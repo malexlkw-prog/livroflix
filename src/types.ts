@@ -380,6 +380,7 @@ export interface DirectConversation {
   unreadBy?: string[];
   unreadCounts?: Record<string, number>;
   participantProfiles?: Record<string, DirectConversationParticipantMeta>;
+  typingAt?: Record<string, string>;
   createdAt: string;
   updatedAt: string;
 }
@@ -392,6 +393,7 @@ export interface DirectMessage {
   text: string;
   createdAt: string;
   read: boolean;
+  deleted?: boolean;
   hiddenFor?: string[];
 }
 
