@@ -33,6 +33,9 @@ import {
   RefreshCw,
   Star,
   Crown,
+  UserPlus,
+  UserCheck,
+  UserMinus,
 } from 'lucide-react';
 import {
   Book,
@@ -57,6 +60,7 @@ import {
   isValidBadgeId,
 } from '../data/badges';
 import { downloadBookPdf } from '../utils/pdfUtils';
+import { FollowersFollowingModal } from './FollowersFollowingModal';
 import {
   isAdminIdentity,
   isReservedAdminUsername,
@@ -1438,6 +1442,8 @@ interface ProfileViewProps {
   onDeleteCommunityPost?: (postId: string) => Promise<void>;
   onDeleteCommunityReply?: (replyId: string) => Promise<void>;
   onToggleCommunityFollow?: (targetUserId: string) => Promise<void>;
+  onEnsurePublicProfileLoaded?: (uid: string) => void;
+  onEnsureUserFollowsLoaded?: (uid: string) => Promise<void> | void;
   unreadMessagesCount?: number;
   onOpenMessages?: (targetUserId?: string) => void;
   onOpenPremiumModal?: () => void;
@@ -1471,6 +1477,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onDeleteCommunityPost,
   onDeleteCommunityReply,
   onToggleCommunityFollow,
+  onEnsurePublicProfileLoaded,
+  onEnsureUserFollowsLoaded,
   unreadMessagesCount = 0,
   onOpenMessages,
   onOpenPremiumModal,
@@ -1492,6 +1500,17 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [draftCustomization, setDraftCustomization] =
     useState<ProfileCustomization>(DEFAULT_PROFILE_CUSTOMIZATION);
   const [showOwnPosts, setShowOwnPosts] = useState(false);
+  const [followersModalState, setFollowersModalState] = useState<{
+    isOpen: boolean;
+    initialTab: 'seguidores' | 'seguindo';
+    targetUserId: string;
+    targetUsername?: string;
+  }>({
+    isOpen: false,
+    initialTab: 'seguidores',
+    targetUserId: '',
+  });
+  const [inspectedUserId, setInspectedUserId] = useState<string | null>(null);
   const [editDisplayName, setEditDisplayName] = useState('');
   const [editUsername, setEditUsername] = useState('');
   const [editBio, setEditBio] = useState('');
@@ -1904,6 +1923,70 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     return communityFollows.filter((f) => f.followerId === userProfile.uid)
       .length;
   }, [communityFollows, userProfile?.uid]);
+
+  const myFollowingIds = React.useMemo(() => {
+    const set = new Set<string>();
+    if (!userProfile?.uid) return set;
+    communityFollows.forEach((f) => {
+      if (f.followerId === userProfile.uid) set.add(f.followingId);
+    });
+    return set;
+  }, [communityFollows, userProfile?.uid]);
+
+  const myFollowerIds = React.useMemo(() => {
+    const set = new Set<string>();
+    if (!userProfile?.uid) return set;
+    communityFollows.forEach((f) => {
+      if (f.followingId === userProfile.uid) set.add(f.followerId);
+    });
+    return set;
+  }, [communityFollows, userProfile?.uid]);
+
+  const inspectedProfile = React.useMemo(() => {
+    if (!inspectedUserId) return null;
+    const fromMap = publicProfilesMap[inspectedUserId];
+    if (fromMap) {
+      return {
+        ...fromMap,
+        uid: inspectedUserId,
+        username: (fromMap.username || 'leitor').replace(/^@+/, ''),
+        profileCustomization: getEffectiveProfileCustomization(
+          fromMap,
+          fromMap.profileCustomization
+        ),
+      };
+    }
+    return {
+      uid: inspectedUserId,
+      displayName: 'Leitor LIVROFLIX',
+      username: `leitor_${inspectedUserId.slice(-4).toLowerCase()}`,
+      bio: '',
+      photoURL: '',
+      updatedAt: '',
+    } as PublicProfile;
+  }, [inspectedUserId, publicProfilesMap]);
+
+  const inspectedFollowersCount = React.useMemo(() => {
+    if (!inspectedUserId) return 0;
+    return communityFollows.filter((f) => f.followingId === inspectedUserId)
+      .length;
+  }, [communityFollows, inspectedUserId]);
+
+  const inspectedFollowingCount = React.useMemo(() => {
+    if (!inspectedUserId) return 0;
+    return communityFollows.filter((f) => f.followerId === inspectedUserId)
+      .length;
+  }, [communityFollows, inspectedUserId]);
+
+  const openInspectedUser = (uid: string | null) => {
+    if (!uid || uid === userProfile?.uid) {
+      setInspectedUserId(null);
+      return;
+    }
+    onEnsurePublicProfileLoaded?.(uid);
+    void onEnsureUserFollowsLoaded?.(uid);
+    setInspectedUserId(uid);
+  };
 
   const { achievements, computedUnlockedBadgeIds } = React.useMemo(
     () =>
@@ -2715,18 +2798,44 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   </strong>{' '}
                   {userPosts.length === 1 ? 'publicação' : 'publicações'}
                 </button>
-                <span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!userProfile?.uid) return;
+                    void onEnsureUserFollowsLoaded?.(userProfile.uid);
+                    setFollowersModalState({
+                      isOpen: true,
+                      initialTab: 'seguidores',
+                      targetUserId: userProfile.uid,
+                      targetUsername: displayUsername || 'leitor',
+                    });
+                  }}
+                  className="hover:text-[#60A5FA] transition-colors cursor-pointer"
+                >
                   <strong className="font-mono-num text-white font-bold">
                     {followersCount}
                   </strong>{' '}
                   {followersCount === 1 ? 'seguidor' : 'seguidores'}
-                </span>
-                <span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!userProfile?.uid) return;
+                    void onEnsureUserFollowsLoaded?.(userProfile.uid);
+                    setFollowersModalState({
+                      isOpen: true,
+                      initialTab: 'seguindo',
+                      targetUserId: userProfile.uid,
+                      targetUsername: displayUsername || 'leitor',
+                    });
+                  }}
+                  className="hover:text-[#60A5FA] transition-colors cursor-pointer"
+                >
                   <strong className="font-mono-num text-white font-bold">
                     {followingCount}
                   </strong>{' '}
                   seguindo
-                </span>
+                </button>
               </div>
             </div>
           </div>
@@ -3293,6 +3402,250 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             onOpenPremiumModal={onOpenPremiumModal}
             onCancel={() => setIsCustomizeModalOpen(false)}
           />
+        )}
+
+        {/* MODAL: LISTA DE SEGUIDORES E SEGUINDO */}
+        <FollowersFollowingModal
+          isOpen={followersModalState.isOpen}
+          initialTab={followersModalState.initialTab}
+          targetUserId={followersModalState.targetUserId}
+          targetUsername={followersModalState.targetUsername}
+          follows={communityFollows}
+          publicProfilesMap={publicProfilesMap}
+          currentUserProfile={userProfile}
+          isAuthenticated={isAuthenticated}
+          isAdmin={isAdmin}
+          onClose={() =>
+            setFollowersModalState((prev) => ({ ...prev, isOpen: false }))
+          }
+          onToggleFollow={onToggleCommunityFollow}
+          onSelectUser={(uid) => {
+            setFollowersModalState((prev) => ({ ...prev, isOpen: false }));
+            openInspectedUser(uid);
+          }}
+          onEnsureUserFollowsLoaded={onEnsureUserFollowsLoaded}
+          onEnsurePublicProfileLoaded={onEnsurePublicProfileLoaded}
+        />
+
+        {/* MODAL: PERFIL PÚBLICO DE OUTRO LEITOR (Acessado pela lista de Seguidores/Seguindo) */}
+        {inspectedProfile && (
+          <div
+            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-md p-0 sm:p-4"
+            onClick={() => openInspectedUser(null)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="relative w-full sm:max-w-2xl rounded-t-3xl sm:rounded-2xl bg-[#040D1A] border border-blue-400/30 shadow-2xl max-h-[90vh] flex flex-col overflow-hidden"
+              style={getProfileBackgroundStyle(
+                inspectedProfile.profileCustomization
+              )}
+            >
+              <ProfileDecorativeEffectLayer
+                effect={inspectedProfile.profileCustomization?.effects}
+              />
+
+              <div className="relative z-10 flex items-center justify-between px-6 py-4 bg-[#071426]/90 border-b border-blue-400/15">
+                <div className="flex items-center gap-2">
+                  <span
+                    className="font-display text-lg font-bold text-white"
+                    style={
+                      getEffectiveUsernameColor(inspectedProfile)
+                        ? { color: getEffectiveUsernameColor(inspectedProfile) }
+                        : undefined
+                    }
+                  >
+                    @{inspectedProfile.username}
+                  </span>
+                  {isUserPremium(inspectedProfile) && (
+                    <Crown className="w-4 h-4 text-amber-400 fill-amber-400/25 shrink-0" />
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openInspectedUser(null)}
+                  className="rounded-full p-1.5 text-blue-200/70 hover:bg-blue-500/15 hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="relative z-10 p-6 overflow-y-auto space-y-6">
+                <div className="relative rounded-2xl bg-[#071426]/90 border border-blue-400/20 p-5 overflow-hidden">
+                  <ProfileIntegratedBanner
+                    banner={inspectedProfile.profileCustomization?.banner}
+                  />
+
+                  <div className="relative z-10 flex flex-col sm:flex-row items-center sm:items-start justify-between gap-4">
+                    <div className="flex flex-col sm:flex-row items-center gap-4 text-center sm:text-left">
+                      {inspectedProfile.photoURL ? (
+                        <img
+                          src={inspectedProfile.photoURL}
+                          alt={`@${inspectedProfile.username}`}
+                          className="h-20 w-20 rounded-full object-cover ring-2 ring-[#60A5FA]"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <div className="flex h-20 w-20 items-center justify-center rounded-full bg-[#040D1A] border-2 border-[#60A5FA]/60 text-[#60A5FA] font-display text-3xl font-bold">
+                          {(inspectedProfile.username || 'L')[0].toUpperCase()}
+                        </div>
+                      )}
+                      <div>
+                        <div className="flex items-center justify-center sm:justify-start gap-2">
+                          <h3
+                            className="font-display text-2xl font-bold text-white"
+                            style={
+                              getEffectiveUsernameColor(inspectedProfile)
+                                ? {
+                                    color:
+                                      getEffectiveUsernameColor(
+                                        inspectedProfile
+                                      ),
+                                  }
+                                : undefined
+                            }
+                          >
+                            @{inspectedProfile.username}
+                          </h3>
+                          {isUserPremium(inspectedProfile) && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-400/35 px-2 py-0.5 text-[10px] font-bold text-amber-300">
+                              <Crown className="w-3 h-3 text-amber-400 fill-amber-400/30" />
+                              <span>Premium</span>
+                            </span>
+                          )}
+                        </div>
+                        {inspectedProfile.bio && (
+                          <p className="mt-2 text-xs sm:text-sm text-blue-100/90 max-w-md whitespace-pre-line">
+                            {inspectedProfile.bio}
+                          </p>
+                        )}
+                        <ProfileHighlightSection
+                          userId={inspectedProfile.uid}
+                          isOwner={false}
+                          align="center-sm-left"
+                        />
+                        <div className="mt-3 flex items-center justify-center sm:justify-start gap-5 text-xs text-blue-200/80">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void onEnsureUserFollowsLoaded?.(
+                                inspectedProfile.uid
+                              );
+                              setFollowersModalState({
+                                isOpen: true,
+                                initialTab: 'seguidores',
+                                targetUserId: inspectedProfile.uid,
+                                targetUsername: inspectedProfile.username,
+                              });
+                            }}
+                            className="hover:text-[#60A5FA] transition-colors cursor-pointer"
+                          >
+                            <strong className="font-mono-num text-white">
+                              {inspectedFollowersCount}
+                            </strong>{' '}
+                            {inspectedFollowersCount === 1
+                              ? 'seguidor'
+                              : 'seguidores'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void onEnsureUserFollowsLoaded?.(
+                                inspectedProfile.uid
+                              );
+                              setFollowersModalState({
+                                isOpen: true,
+                                initialTab: 'seguindo',
+                                targetUserId: inspectedProfile.uid,
+                                targetUsername: inspectedProfile.username,
+                              });
+                            }}
+                            className="hover:text-[#60A5FA] transition-colors cursor-pointer"
+                          >
+                            <strong className="font-mono-num text-white">
+                              {inspectedFollowingCount}
+                            </strong>{' '}
+                            seguindo
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col items-center sm:items-end gap-2.5 shrink-0">
+                      <ProfileBadgesShowcase
+                        unlockedBadgeIds={inspectedProfile.unlockedBadges}
+                        profileBadgeIds={inspectedProfile.profileBadges}
+                        isOwner={false}
+                        customBadgeImages={platformSettings?.badgeImages}
+                      />
+
+                      {userProfile?.uid &&
+                        inspectedProfile.uid !== userProfile.uid && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            {onToggleCommunityFollow && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onToggleCommunityFollow(inspectedProfile.uid)
+                                }
+                                className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition-all cursor-pointer ${
+                                  myFollowingIds.has(inspectedProfile.uid)
+                                    ? 'bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/35 text-rose-200 hover:text-white'
+                                    : 'bg-[#2563EB] hover:bg-[#3B82F6] text-white shadow-lg'
+                                }`}
+                              >
+                                {myFollowingIds.has(inspectedProfile.uid) ? (
+                                  <>
+                                    <UserMinus className="w-4 h-4 text-rose-300" />
+                                    <span>Deixar de seguir</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <UserPlus className="w-4 h-4" />
+                                    <span>
+                                      {myFollowerIds.has(inspectedProfile.uid)
+                                        ? 'Seguir de volta'
+                                        : 'Seguir'}
+                                    </span>
+                                  </>
+                                )}
+                              </button>
+                            )}
+
+                            {onOpenMessages && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const targetUid = inspectedProfile.uid;
+                                  openInspectedUser(null);
+                                  onOpenMessages(targetUid);
+                                }}
+                                className="inline-flex items-center gap-1.5 rounded-xl bg-[#040D1A] hover:bg-blue-500/20 border border-blue-400/35 px-4 py-2 text-xs font-bold text-[#60A5FA] hover:text-white transition-colors cursor-pointer"
+                              >
+                                <MessageCircle className="w-4 h-4" />
+                                <span>Mensagem</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
+                    </div>
+                  </div>
+                </div>
+
+                <ProfileFavoriteBooksShowcase
+                  favoriteBookIds={
+                    inspectedProfile.profileFavoriteBooks ??
+                    inspectedProfile.favoriteBooks
+                  }
+                  books={books}
+                  maxBooks={getMaxProfileFavoriteBooks(inspectedProfile)}
+                  onSelectBook={(b) => {
+                    openInspectedUser(null);
+                    onSelectBook(b);
+                  }}
+                />
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Botão único de Configurações no Fim da Página de Perfil */}

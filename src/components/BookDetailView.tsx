@@ -16,6 +16,7 @@ import {
   X,
   UserPlus,
   UserCheck,
+  UserMinus,
   MessageSquareText,
   MessageCircle,
   ChevronDown,
@@ -56,6 +57,7 @@ import {
   ProfileIntegratedBanner,
 } from './ProfileCustomization';
 import { CreateReportInput } from './CommunityView';
+import { FollowersFollowingModal } from './FollowersFollowingModal';
 
 export const REVIEW_MIN_CHARS = 1;
 export const REVIEW_MAX_CHARS = 500;
@@ -150,6 +152,7 @@ interface BookDetailViewProps {
   onOpenPremiumModal?: () => void;
   onOpenMessages?: (targetUserId?: string) => void;
   onEnsurePublicProfileLoaded?: (uid: string) => void;
+  onEnsureUserFollowsLoaded?: (uid: string) => Promise<void> | void;
   hasMoreRemoteReviews?: boolean;
   isLoadingMoreReviews?: boolean;
   onLoadMoreReviews?: () => void;
@@ -182,6 +185,7 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
   onOpenPremiumModal,
   onOpenMessages,
   onEnsurePublicProfileLoaded,
+  onEnsureUserFollowsLoaded,
   hasMoreRemoteReviews = false,
   isLoadingMoreReviews = false,
   onLoadMoreReviews,
@@ -219,11 +223,22 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
 
   // Public Profile Inspection & Report Modal States
   const [inspectedUserId, setInspectedUserId] = useState<string | null>(null);
+  const [followModalState, setFollowModalState] = useState<{
+    isOpen: boolean;
+    initialTab: 'followers' | 'following';
+    targetUserId: string;
+    targetUsername?: string;
+  }>({
+    isOpen: false,
+    initialTab: 'followers',
+    targetUserId: '',
+  });
   useEffect(() => {
     if (inspectedUserId) {
       onEnsurePublicProfileLoaded?.(inspectedUserId);
+      onEnsureUserFollowsLoaded?.(inspectedUserId);
     }
-  }, [inspectedUserId, onEnsurePublicProfileLoaded]);
+  }, [inspectedUserId, onEnsurePublicProfileLoaded, onEnsureUserFollowsLoaded]);
   const [reportTarget, setReportTarget] = useState<{
     targetType: 'review' | 'user';
     targetReviewId?: string;
@@ -1342,21 +1357,43 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
                         )}
                         align="center-sm-left"
                       />
-                      <div className="mt-3 flex items-center justify-center sm:justify-start gap-5 text-xs text-blue-200/80">
-                        <span>
+                      <div className="mt-3 flex items-center justify-center sm:justify-start gap-3 text-xs text-blue-200/80">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFollowModalState({
+                              isOpen: true,
+                              initialTab: 'followers',
+                              targetUserId: inspectedProfile.uid,
+                              targetUsername: inspectedProfile.username,
+                            })
+                          }
+                          className="hover:text-white transition-colors cursor-pointer rounded-lg px-2 py-1 hover:bg-blue-500/15 -mx-2 -my-1"
+                        >
                           <strong className="font-mono-num text-white">
                             {inspectedFollowersCount}
                           </strong>{' '}
                           {inspectedFollowersCount === 1
                             ? 'seguidor'
                             : 'seguidores'}
-                        </span>
-                        <span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFollowModalState({
+                              isOpen: true,
+                              initialTab: 'following',
+                              targetUserId: inspectedProfile.uid,
+                              targetUsername: inspectedProfile.username,
+                            })
+                          }
+                          className="hover:text-white transition-colors cursor-pointer rounded-lg px-2 py-1 hover:bg-blue-500/15 -mx-2 -my-1"
+                        >
                           <strong className="font-mono-num text-white">
                             {inspectedFollowingCount}
                           </strong>{' '}
                           seguindo
-                        </span>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1377,16 +1414,22 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
                               onClick={() =>
                                 onToggleCommunityFollow(inspectedProfile.uid)
                               }
-                              className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition-colors cursor-pointer ${
+                              className={`group/followbtn inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition-colors cursor-pointer ${
                                 myFollowingIds.has(inspectedProfile.uid)
-                                  ? 'bg-blue-950 border border-blue-400/30 text-blue-100'
+                                  ? 'bg-blue-950 hover:bg-rose-500/20 border border-blue-400/30 hover:border-rose-400/40 text-blue-100 hover:text-rose-200'
                                   : 'bg-[#2563EB] hover:bg-[#3B82F6] text-white'
                               }`}
                             >
                               {myFollowingIds.has(inspectedProfile.uid) ? (
                                 <>
-                                  <UserCheck className="w-4 h-4" />
-                                  <span>Seguindo</span>
+                                  <UserCheck className="w-4 h-4 group-hover/followbtn:hidden" />
+                                  <UserMinus className="w-4 h-4 hidden group-hover/followbtn:block text-rose-300" />
+                                  <span className="group-hover/followbtn:hidden">
+                                    Seguindo
+                                  </span>
+                                  <span className="hidden group-hover/followbtn:inline">
+                                    Deixar de seguir
+                                  </span>
                                 </>
                               ) : (
                                 <>
@@ -1434,6 +1477,27 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
           </div>
         </div>
       )}
+
+      <FollowersFollowingModal
+        isOpen={followModalState.isOpen}
+        initialTab={followModalState.initialTab}
+        targetUserId={followModalState.targetUserId}
+        targetUsername={followModalState.targetUsername}
+        currentUserProfile={userProfile}
+        communityFollows={communityFollows}
+        publicProfilesMap={publicProfilesMap}
+        isAdmin={isAdmin}
+        onClose={() =>
+          setFollowModalState((prev) => ({ ...prev, isOpen: false }))
+        }
+        onToggleFollow={onToggleCommunityFollow}
+        onSelectUser={(uid) => {
+          setFollowModalState((prev) => ({ ...prev, isOpen: false }));
+          setInspectedUserId(uid);
+        }}
+        onEnsurePublicProfileLoaded={onEnsurePublicProfileLoaded}
+        onEnsureUserFollowsLoaded={onEnsureUserFollowsLoaded}
+      />
 
       {/* =============================================================== */}
       {/* MODAL: DENUNCIAR REVIEW                                          */}

@@ -8,6 +8,7 @@ import {
   Users,
   UserPlus,
   UserCheck,
+  UserMinus,
   Crown,
   MessageCircle,
 } from 'lucide-react';
@@ -26,6 +27,7 @@ import { BookCard } from './BookCard';
 import { CommunityPostCard, CreateReplyInput } from './CommunityView';
 import { ProfileFavoriteBooksShowcase } from './MyLibraryAndProfile';
 import { ProfileHighlightSection } from './ProfileHighlightSection';
+import { FollowersFollowingModal } from './FollowersFollowingModal';
 import {
   getProfileBackgroundStyle,
   ProfileDecorativeEffectLayer,
@@ -67,7 +69,9 @@ interface SearchViewProps {
   onRequireAuth?: () => void;
   onOpenMessages?: (targetUserId?: string) => void;
   onSearchPublicProfiles?: (searchQuery: string) => void;
+  onLoadRecommendedProfiles?: () => Promise<void> | void;
   onEnsurePublicProfileLoaded?: (uid: string) => void;
+  onEnsureUserFollowsLoaded?: (uid: string) => Promise<void> | void;
 }
 
 const LEGACY_SUGGESTIONS = new Set([
@@ -99,16 +103,32 @@ export const SearchView: React.FC<SearchViewProps> = ({
   onRequireAuth,
   onOpenMessages,
   onSearchPublicProfiles,
+  onLoadRecommendedProfiles,
   onEnsurePublicProfileLoaded,
+  onEnsureUserFollowsLoaded,
 }) => {
   const [query, setQuery] = useState<string>('');
   const [inspectedUserId, setInspectedUserId] = useState<string | null>(null);
   const [showInspectedUserPosts, setShowInspectedUserPosts] = useState(false);
+  const [followersModalState, setFollowersModalState] = useState<{
+    isOpen: boolean;
+    initialTab: 'seguidores' | 'seguindo';
+    targetUserId: string;
+    targetUsername?: string;
+  }>({
+    isOpen: false,
+    initialTab: 'seguidores',
+    targetUserId: '',
+  });
 
   const onSearchProfilesRef = React.useRef(onSearchPublicProfiles);
   React.useEffect(() => {
     onSearchProfilesRef.current = onSearchPublicProfiles;
   }, [onSearchPublicProfiles]);
+
+  React.useEffect(() => {
+    void onLoadRecommendedProfiles?.();
+  }, [onLoadRecommendedProfiles]);
 
   React.useEffect(() => {
     const clean = query.trim().replace(/^@+/, '').toLowerCase();
@@ -130,6 +150,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
     }
     if (uid) {
       onEnsurePublicProfileLoaded?.(uid);
+      void onEnsureUserFollowsLoaded?.(uid);
     }
     setInspectedUserId(uid);
     setShowInspectedUserPosts(false);
@@ -231,6 +252,21 @@ export const SearchView: React.FC<SearchViewProps> = ({
     return set;
   }, [communityFollows, currentUserId]);
 
+  const recommendedUsers = useMemo(() => {
+    const others = allKnownProfiles.filter(
+      (prof) => prof.uid && prof.uid !== currentUserId
+    );
+    return [...others].sort((a, b) => {
+      const aFollowed = myFollowingIds.has(a.uid) ? 1 : 0;
+      const bFollowed = myFollowingIds.has(b.uid) ? 1 : 0;
+      if (aFollowed !== bFollowed) return aFollowed - bFollowed;
+      const aFollowsMe = myFollowerIds.has(a.uid) ? 0 : 1;
+      const bFollowsMe = myFollowerIds.has(b.uid) ? 0 : 1;
+      if (aFollowsMe !== bFollowsMe) return aFollowsMe - bFollowsMe;
+      return (a.username || '').localeCompare(b.username || '');
+    });
+  }, [allKnownProfiles, currentUserId, myFollowingIds, myFollowerIds]);
+
   const matchedUsers = useMemo(() => {
     const raw = query.trim().toLowerCase();
     if (!raw) return [] as PublicProfile[];
@@ -239,7 +275,8 @@ export const SearchView: React.FC<SearchViewProps> = ({
 
     return allKnownProfiles.filter((prof) => {
       const uname = (prof.username || '').replace(/^@+/, '').toLowerCase();
-      return uname.includes(cleanQ);
+      const dname = (prof.displayName || '').toLowerCase();
+      return uname.includes(cleanQ) || dname.includes(cleanQ);
     });
   }, [allKnownProfiles, query]);
 
@@ -409,21 +446,27 @@ export const SearchView: React.FC<SearchViewProps> = ({
           )}
         </div>
 
-        {/* Matched Users Section (@username search) */}
-        {query.trim() !== '' && (matchedUsers.length > 0 || query.trim().startsWith('@')) && (
+        {/* Recommended Profiles (when query is empty) OR Matched Users Section (@username search) */}
+        {(query.trim() === ''
+          ? recommendedUsers.length > 0
+          : matchedUsers.length > 0 || query.trim().startsWith('@')) && (
           <div className="mb-10">
             <h2 className="font-display text-2xl font-bold text-white mb-4 flex items-center gap-2">
               <Users className="w-5 h-5 text-[#60A5FA]" />
-              <span>Usuários encontrados ({matchedUsers.length})</span>
+              <span>
+                {query.trim() === ''
+                  ? 'Sugestões para seguir'
+                  : `Usuários encontrados (${matchedUsers.length})`}
+              </span>
             </h2>
 
-            {matchedUsers.length === 0 ? (
+            {query.trim() !== '' && matchedUsers.length === 0 ? (
               <div className="rounded-xl bg-[#071426] border border-blue-400/15 p-6 text-center text-sm text-blue-200/75">
                 Nenhum usuário encontrado para &ldquo;{query}&rdquo;.
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {matchedUsers.map((prof) => {
+                {(query.trim() === '' ? recommendedUsers : matchedUsers).map((prof) => {
                   const isOwn = prof.uid === currentUserId;
                   const isFollowing = myFollowingIds.has(prof.uid);
                   const followsMe = myFollowerIds.has(prof.uid);
@@ -485,14 +528,14 @@ export const SearchView: React.FC<SearchViewProps> = ({
                           onClick={(e) => handleFollowButtonClick(prof.uid, e)}
                           className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer shrink-0 ${
                             isFollowing
-                              ? 'bg-blue-950/70 border border-blue-400/30 text-blue-200 hover:border-rose-400/40 hover:text-rose-200'
+                              ? 'bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/35 text-rose-200 hover:text-white'
                               : 'bg-[#2563EB] hover:bg-[#3B82F6] text-white shadow-md'
                           }`}
                         >
                           {isFollowing ? (
                             <>
-                              <UserCheck className="w-3.5 h-3.5" />
-                              <span>Seguindo</span>
+                              <UserMinus className="w-3.5 h-3.5 text-rose-300" />
+                              <span>Deixar de seguir</span>
                             </>
                           ) : (
                             <>
@@ -721,20 +764,44 @@ export const SearchView: React.FC<SearchViewProps> = ({
                           ? 'publicação'
                           : 'publicações'}
                       </button>
-                      <span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void onEnsureUserFollowsLoaded?.(inspectedProfile.uid);
+                          setFollowersModalState({
+                            isOpen: true,
+                            initialTab: 'seguidores',
+                            targetUserId: inspectedProfile.uid,
+                            targetUsername: inspectedProfile.username,
+                          });
+                        }}
+                        className="hover:text-[#60A5FA] transition-colors cursor-pointer"
+                      >
                         <strong className="font-mono-num text-white">
                           {inspectedFollowersCount}
                         </strong>{' '}
                         {inspectedFollowersCount === 1
                           ? 'seguidor'
                           : 'seguidores'}
-                      </span>
-                      <span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void onEnsureUserFollowsLoaded?.(inspectedProfile.uid);
+                          setFollowersModalState({
+                            isOpen: true,
+                            initialTab: 'seguindo',
+                            targetUserId: inspectedProfile.uid,
+                            targetUsername: inspectedProfile.username,
+                          });
+                        }}
+                        className="hover:text-[#60A5FA] transition-colors cursor-pointer"
+                      >
                         <strong className="font-mono-num text-white">
                           {inspectedFollowingCount}
                         </strong>{' '}
                         seguindo
-                      </span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -746,14 +813,14 @@ export const SearchView: React.FC<SearchViewProps> = ({
                       onClick={() => handleFollowButtonClick(inspectedProfile.uid)}
                       className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs sm:text-sm font-bold transition-all cursor-pointer shrink-0 ${
                         myFollowingIds.has(inspectedProfile.uid)
-                          ? 'bg-blue-950/70 border border-blue-400/30 text-blue-200 hover:border-rose-400/40 hover:text-rose-200'
+                          ? 'bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/35 text-rose-200 hover:text-white'
                           : 'bg-[#2563EB] hover:bg-[#3B82F6] text-white shadow-lg'
                       }`}
                     >
                       {myFollowingIds.has(inspectedProfile.uid) ? (
                         <>
-                          <UserCheck className="w-4 h-4" />
-                          <span>Seguindo</span>
+                          <UserMinus className="w-4 h-4 text-rose-300" />
+                          <span>Deixar de seguir</span>
                         </>
                       ) : (
                         <>
@@ -838,6 +905,32 @@ export const SearchView: React.FC<SearchViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* MODAL: LISTA DE SEGUIDORES E SEGUINDO */}
+      <FollowersFollowingModal
+        isOpen={followersModalState.isOpen}
+        initialTab={followersModalState.initialTab}
+        targetUserId={followersModalState.targetUserId}
+        targetUsername={followersModalState.targetUsername}
+        follows={communityFollows}
+        publicProfilesMap={publicProfilesMap}
+        currentUserProfile={currentUserProfile}
+        isAuthenticated={isAuthenticated}
+        isAdmin={isAdmin}
+        onClose={() =>
+          setFollowersModalState((prev) => ({ ...prev, isOpen: false }))
+        }
+        onToggleFollow={onToggleFollow}
+        onSelectUser={(uid) => {
+          setFollowersModalState((prev) => ({ ...prev, isOpen: false }));
+          if (uid !== currentUserId) {
+            openInspectedUser(uid);
+          }
+        }}
+        onEnsureUserFollowsLoaded={onEnsureUserFollowsLoaded}
+        onEnsurePublicProfileLoaded={onEnsurePublicProfileLoaded}
+        onRequireAuth={onRequireAuth}
+      />
     </div>
   );
 };

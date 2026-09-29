@@ -361,6 +361,9 @@ export default function App() {
 
   // On-demand public_profiles cache & loader (replaces global public_profiles listener)
   const loadedPublicProfileUidsRef = useRef<Set<string>>(new Set());
+  const hasLoadedRecommendedProfilesRef = useRef<boolean>(false);
+  const loadedFollowsForUidRef = useRef<Set<string>>(new Set());
+  const unfollowedPairsRef = useRef<Set<string>>(new Set());
   const searchedUsernameQueriesRef = useRef<Set<string>>(new Set());
   const usernameAvailabilityCacheRef = useRef<
     Map<string, { available: boolean; normalized: string; reason?: string }>
@@ -464,14 +467,135 @@ export default function App() {
     []
   );
 
+  const ensureUserFollowsLoaded = useCallback(
+    async (uid: string) => {
+      const cleanUid = (uid || '').trim();
+      if (!cleanUid) return;
+      if (loadedFollowsForUidRef.current.has(cleanUid)) return;
+      loadedFollowsForUidRef.current.add(cleanUid);
+
+      try {
+        const [followingSnap, followersSnap] = await Promise.all([
+          getDocs(
+            query(
+              collection(db, 'community_follows'),
+              where('followerId', '==', cleanUid),
+              limit(200)
+            )
+          ),
+          getDocs(
+            query(
+              collection(db, 'community_follows'),
+              where('followingId', '==', cleanUid),
+              limit(200)
+            )
+          ),
+        ]);
+
+        const fetched: CommunityFollow[] = [];
+        const relatedUids: string[] = [];
+
+        const processDoc = (d: { id: string; data: () => unknown }) => {
+          const data = d.data() as CommunityFollow;
+          if (!data?.followerId || !data?.followingId) return;
+          const pairKey = `${data.followerId}_${data.followingId}`;
+          if (unfollowedPairsRef.current.has(pairKey)) return;
+          fetched.push({
+            ...data,
+            id: d.id,
+          });
+          if (data.followerId !== cleanUid) relatedUids.push(data.followerId);
+          if (data.followingId !== cleanUid) relatedUids.push(data.followingId);
+        };
+
+        followingSnap.forEach(processDoc);
+        followersSnap.forEach(processDoc);
+
+        setCommunityFollows((prev) => {
+          const byPair = new Map<string, CommunityFollow>();
+          for (const f of prev) {
+            if (!f?.followerId || !f?.followingId) continue;
+            const pairKey = `${f.followerId}_${f.followingId}`;
+            if (unfollowedPairsRef.current.has(pairKey)) continue;
+            // Keep existing entries for other users, or if Firestore returned empty while offline
+            if (
+              f.followerId !== cleanUid &&
+              f.followingId !== cleanUid
+            ) {
+              byPair.set(pairKey, f);
+            } else if (!firebaseUser && fetched.length === 0) {
+              byPair.set(pairKey, f);
+            }
+          }
+          for (const f of fetched) {
+            const pairKey = `${f.followerId}_${f.followingId}`;
+            if (!unfollowedPairsRef.current.has(pairKey)) {
+              byPair.set(pairKey, f);
+            }
+          }
+          return Array.from(byPair.values());
+        });
+
+        if (relatedUids.length > 0) {
+          void ensurePublicProfilesLoaded(relatedUids);
+        }
+      } catch {
+        loadedFollowsForUidRef.current.delete(cleanUid);
+      }
+    },
+    [ensurePublicProfilesLoaded, firebaseUser]
+  );
+
   const handleEnsureSinglePublicProfileLoaded = useCallback(
     (uid: string) => {
       if (uid) {
         void ensurePublicProfilesLoaded([uid]);
+        void ensureUserFollowsLoaded(uid);
       }
     },
-    [ensurePublicProfilesLoaded]
+    [ensurePublicProfilesLoaded, ensureUserFollowsLoaded]
   );
+
+  useEffect(() => {
+    if (activeUserId) {
+      void ensureUserFollowsLoaded(activeUserId);
+    }
+  }, [activeUserId, ensureUserFollowsLoaded]);
+
+  const handleLoadRecommendedProfiles = useCallback(async () => {
+    if (hasLoadedRecommendedProfilesRef.current) return;
+    hasLoadedRecommendedProfilesRef.current = true;
+
+    try {
+      const q = query(collection(db, 'public_profiles'), limit(24));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const nextEntries: Record<string, PublicProfile> = {};
+        snap.forEach((d) => {
+          const data = d.data() as PublicProfile;
+          const uid = data.uid || d.id;
+          if (!uid) return;
+          loadedPublicProfileUidsRef.current.add(uid);
+          if (isAdminIdentity({ ...data, uid })) {
+            registerKnownAdminUid(uid);
+            return;
+          }
+          nextEntries[uid] = { ...data, uid };
+          if (data.username) {
+            saveLocalUsernameOwner(
+              data.username.replace(/^@+/, '').trim().toLowerCase(),
+              uid
+            );
+          }
+        });
+        if (Object.keys(nextEntries).length > 0) {
+          setPublicProfilesMap((prev) => ({ ...prev, ...nextEntries }));
+        }
+      }
+    } catch {
+      hasLoadedRecommendedProfilesRef.current = false;
+    }
+  }, []);
 
   const handleSearchPublicProfiles = useCallback(
     async (rawQuery: string) => {
@@ -3184,9 +3308,12 @@ export default function App() {
   const handleToggleCommunityFollow = async (
     targetUserId: string
   ): Promise<void> => {
-    if (!IS_COMMUNITY_ENABLED) return;
-    if (!userProfile || !activeUserId) return;
-    if (targetUserId === activeUserId) {
+    const effectiveFollowerId = firebaseUser?.uid || activeUserId;
+    if (!userProfile || !effectiveFollowerId || !targetUserId) return;
+    if (
+      targetUserId === effectiveFollowerId ||
+      targetUserId === activeUserId
+    ) {
       throw new Error('Você não pode seguir a si mesmo.');
     }
     if (
@@ -3196,39 +3323,108 @@ export default function App() {
       return;
     }
 
-    const followId = `${activeUserId}_${targetUserId}`;
-    const existingFollow = communityFollows.find(
+    const followId = `${effectiveFollowerId}_${targetUserId}`;
+    const legacyFollowId =
+      activeUserId && activeUserId !== effectiveFollowerId
+        ? `${activeUserId}_${targetUserId}`
+        : followId;
+
+    const existingMatches = communityFollows.filter(
       (f) =>
         f.id === followId ||
-        (f.followerId === activeUserId && f.followingId === targetUserId)
+        f.id === legacyFollowId ||
+        ((f.followerId === effectiveFollowerId ||
+          f.followerId === activeUserId) &&
+          f.followingId === targetUserId)
     );
 
-    if (existingFollow) {
-      const targetDocId = existingFollow.id || followId;
-      setCommunityFollows((prev) => prev.filter((f) => f.id !== targetDocId));
+    if (existingMatches.length > 0) {
+      // DESSEGUIR (Unfollow)
+      unfollowedPairsRef.current.add(`${effectiveFollowerId}_${targetUserId}`);
+      if (activeUserId) {
+        unfollowedPairsRef.current.add(`${activeUserId}_${targetUserId}`);
+      }
+
+      setCommunityFollows((prev) =>
+        prev.filter(
+          (f) =>
+            f.id !== followId &&
+            f.id !== legacyFollowId &&
+            !(
+              (f.followerId === effectiveFollowerId ||
+                f.followerId === activeUserId) &&
+              f.followingId === targetUserId
+            )
+        )
+      );
+
       if (firebaseUser) {
+        const docIdsToDelete = new Set<string>(
+          existingMatches.map((m) => m.id).filter(Boolean)
+        );
+        docIdsToDelete.add(followId);
+
         try {
-          await deleteDoc(doc(db, 'community_follows', targetDocId));
-        } catch (error) {
-          handleFirestoreError(
-            error,
-            OperationType.DELETE,
-            `community_follows/${targetDocId}`
+          const qSnap = await getDocs(
+            query(
+              collection(db, 'community_follows'),
+              where('followerId', '==', firebaseUser.uid)
+            )
           );
+          qSnap.forEach((d) => {
+            const data = d.data() as CommunityFollow;
+            if (data.followingId === targetUserId) {
+              docIdsToDelete.add(d.id);
+            }
+          });
+        } catch {
+          // ignore query error
         }
+
+        await Promise.all(
+          Array.from(docIdsToDelete).map(async (docId) => {
+            try {
+              const docRef = doc(db, 'community_follows', docId);
+              const snap = await getDoc(docRef);
+              if (snap.exists()) {
+                await deleteDoc(docRef);
+              }
+            } catch {
+              // ignore individual delete error
+            }
+          })
+        );
       }
     } else {
+      // SEGUIR (Follow)
+      unfollowedPairsRef.current.delete(
+        `${effectiveFollowerId}_${targetUserId}`
+      );
+      if (activeUserId) {
+        unfollowedPairsRef.current.delete(`${activeUserId}_${targetUserId}`);
+      }
+
       const nowIso = new Date().toISOString();
       const newFollow: CommunityFollow = {
         id: followId,
-        followerId: activeUserId,
+        followerId: effectiveFollowerId,
         followingId: targetUserId,
         createdAt: nowIso,
       };
       setCommunityFollows((prev) => [
-        ...prev.filter((f) => f.id !== followId),
+        ...prev.filter(
+          (f) =>
+            f.id !== followId &&
+            !(
+              (f.followerId === effectiveFollowerId ||
+                f.followerId === activeUserId) &&
+              f.followingId === targetUserId
+            )
+        ),
         newFollow,
       ]);
+
+      void ensurePublicProfilesLoaded([targetUserId]);
 
       if (firebaseUser) {
         try {
@@ -3241,7 +3437,11 @@ export default function App() {
           );
         }
 
-        if (!isAdmin && !isAdminIdentity(userProfile)) {
+        if (
+          IS_COMMUNITY_ENABLED &&
+          !isAdmin &&
+          !isAdminIdentity(userProfile)
+        ) {
           const authorName =
             userProfile.displayName || userProfile.nome || 'Leitor LIVROFLIX';
           const authorUsername = (
@@ -3250,11 +3450,11 @@ export default function App() {
             .replace(/^@+/, '')
             .toLowerCase();
           const authorPhotoURL = userProfile.photoURL ?? userProfile.foto ?? '';
-          const notifId = `notif_follow_${activeUserId}_${targetUserId}`;
+          const notifId = `notif_follow_${effectiveFollowerId}_${targetUserId}`;
           const notif: CommunityNotification = stripUndefined({
             id: notifId,
             recipientId: targetUserId,
-            actorId: activeUserId,
+            actorId: effectiveFollowerId,
             actorName: authorName,
             actorUsername: authorUsername,
             actorPhotoURL: authorPhotoURL,
@@ -4612,7 +4812,9 @@ export default function App() {
             onDeleteReply={handleDeleteCommunityReply}
             onRequireAuth={() => handleNavigate('perfil')}
             onSearchPublicProfiles={handleSearchPublicProfiles}
+            onLoadRecommendedProfiles={handleLoadRecommendedProfiles}
             onEnsurePublicProfileLoaded={handleEnsureSinglePublicProfileLoaded}
+            onEnsureUserFollowsLoaded={ensureUserFollowsLoaded}
           />
         )}
 
@@ -4707,6 +4909,8 @@ export default function App() {
             onDeleteCommunityPost={handleDeleteCommunityPost}
             onDeleteCommunityReply={handleDeleteCommunityReply}
             onToggleCommunityFollow={handleToggleCommunityFollow}
+            onEnsurePublicProfileLoaded={handleEnsureSinglePublicProfileLoaded}
+            onEnsureUserFollowsLoaded={ensureUserFollowsLoaded}
             unreadMessagesCount={unreadMessagesCount}
             onOpenMessages={handleOpenDirectMessages}
             onOpenPremiumModal={() => setVipModalOpen(true)}
@@ -4739,6 +4943,7 @@ export default function App() {
             onToggleCommunityFollow={handleToggleCommunityFollow}
             onOpenMessages={handleOpenDirectMessages}
             onEnsurePublicProfileLoaded={handleEnsureSinglePublicProfileLoaded}
+            onEnsureUserFollowsLoaded={ensureUserFollowsLoaded}
             onSubmitReport={handleSubmitCommunityReport}
             onRequireAuth={() => handleNavigate('perfil')}
             onOpenPremiumModal={() => setVipModalOpen(true)}

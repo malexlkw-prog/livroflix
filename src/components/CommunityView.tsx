@@ -11,6 +11,7 @@ import {
   Flag,
   UserPlus,
   UserCheck,
+  UserMinus,
   X,
   Check,
   Send,
@@ -60,6 +61,7 @@ import {
   getMaxProfileFavoriteBooks,
   isUserPremium,
 } from '../utils/premiumUtils';
+import { FollowersFollowingModal } from './FollowersFollowingModal';
 
 export const POST_MAX_LENGTH = 300;
 export const REPLY_MAX_LENGTH = 300;
@@ -597,16 +599,20 @@ export const CommunityPostCard: React.FC<CommunityPostCardProps> = ({
             <button
               type="button"
               onClick={handleFollowClick}
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-all cursor-pointer ${
+              className={`group/followbtn inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-all cursor-pointer ${
                 isFollowingAuthor
-                  ? 'bg-blue-950/70 border border-blue-400/30 text-blue-200 hover:border-rose-400/40 hover:text-rose-200'
+                  ? 'bg-blue-950/70 hover:bg-rose-500/20 border border-blue-400/30 text-blue-200 hover:border-rose-400/40 hover:text-rose-200'
                   : 'bg-[#2563EB] hover:bg-[#3B82F6] text-white shadow-sm'
               }`}
             >
               {isFollowingAuthor ? (
                 <>
-                  <UserCheck className="w-3.5 h-3.5" />
-                  <span>Seguindo</span>
+                  <UserCheck className="w-3.5 h-3.5 group-hover/followbtn:hidden" />
+                  <UserMinus className="w-3.5 h-3.5 hidden group-hover/followbtn:block text-rose-300" />
+                  <span className="group-hover/followbtn:hidden">Seguindo</span>
+                  <span className="hidden group-hover/followbtn:inline">
+                    Deixar de seguir
+                  </span>
                 </>
               ) : (
                 <>
@@ -1213,6 +1219,16 @@ export const CommunityView: React.FC<CommunityViewProps> = ({
   // Inspected Reader Public Profile Modal
   const [inspectedUserId, setInspectedUserId] = useState<string | null>(null);
   const [showInspectedUserPosts, setShowInspectedUserPosts] = useState(false);
+  const [followModalState, setFollowModalState] = useState<{
+    isOpen: boolean;
+    initialTab: 'followers' | 'following';
+    targetUserId: string;
+    targetUsername?: string;
+  }>({
+    isOpen: false,
+    initialTab: 'followers',
+    targetUserId: '',
+  });
 
   const openInspectedUser = (uid: string | null) => {
     if (
@@ -2585,20 +2601,42 @@ export const CommunityView: React.FC<CommunityViewProps> = ({
                           ? 'publicação'
                           : 'publicações'}
                       </button>
-                      <span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setFollowModalState({
+                            isOpen: true,
+                            initialTab: 'followers',
+                            targetUserId: inspectedProfile.uid,
+                            targetUsername: inspectedProfile.username,
+                          })
+                        }
+                        className="hover:text-white transition-colors cursor-pointer rounded-lg px-2 py-1 hover:bg-blue-500/15 -mx-2 -my-1"
+                      >
                         <strong className="font-mono-num text-white">
                           {inspectedFollowersCount}
                         </strong>{' '}
                         {inspectedFollowersCount === 1
                           ? 'seguidor'
                           : 'seguidores'}
-                      </span>
-                      <span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setFollowModalState({
+                            isOpen: true,
+                            initialTab: 'following',
+                            targetUserId: inspectedProfile.uid,
+                            targetUsername: inspectedProfile.username,
+                          })
+                        }
+                        className="hover:text-white transition-colors cursor-pointer rounded-lg px-2 py-1 hover:bg-blue-500/15 -mx-2 -my-1"
+                      >
                         <strong className="font-mono-num text-white">
                           {inspectedFollowingCount}
                         </strong>{' '}
                         seguindo
-                      </span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -2618,16 +2656,22 @@ export const CommunityView: React.FC<CommunityViewProps> = ({
                         <button
                           type="button"
                           onClick={() => onToggleFollow(inspectedProfile.uid)}
-                          className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition-colors cursor-pointer ${
+                          className={`group/followbtn inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition-colors cursor-pointer ${
                             myFollowingIds.has(inspectedProfile.uid)
-                              ? 'bg-blue-950 border border-blue-400/30 text-blue-100'
+                              ? 'bg-blue-950 hover:bg-rose-500/20 border border-blue-400/30 hover:border-rose-400/40 text-blue-100 hover:text-rose-200'
                               : 'bg-[#2563EB] hover:bg-[#3B82F6] text-white'
                           }`}
                         >
                           {myFollowingIds.has(inspectedProfile.uid) ? (
                             <>
-                              <UserCheck className="w-4 h-4" />
-                              <span>Seguindo</span>
+                              <UserCheck className="w-4 h-4 group-hover/followbtn:hidden" />
+                              <UserMinus className="w-4 h-4 hidden group-hover/followbtn:block text-rose-300" />
+                              <span className="group-hover/followbtn:hidden">
+                                Seguindo
+                              </span>
+                              <span className="hidden group-hover/followbtn:inline">
+                                Deixar de seguir
+                              </span>
                             </>
                           ) : (
                             <>
@@ -2732,6 +2776,25 @@ export const CommunityView: React.FC<CommunityViewProps> = ({
           </div>
         </div>
       )}
+
+      <FollowersFollowingModal
+        isOpen={followModalState.isOpen}
+        initialTab={followModalState.initialTab}
+        targetUserId={followModalState.targetUserId}
+        targetUsername={followModalState.targetUsername}
+        currentUserProfile={currentUserProfile}
+        communityFollows={follows}
+        publicProfilesMap={publicProfilesMap}
+        isAdmin={isAdmin}
+        onClose={() =>
+          setFollowModalState((prev) => ({ ...prev, isOpen: false }))
+        }
+        onToggleFollow={onToggleFollow}
+        onSelectUser={(uid) => {
+          setFollowModalState((prev) => ({ ...prev, isOpen: false }));
+          openInspectedUser(uid);
+        }}
+      />
 
       {/* MODAL: DENUNCIAR PUBLICAÇÃO OU USUÁRIO */}
       {reportTarget && (
