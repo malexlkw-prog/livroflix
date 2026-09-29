@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   collection,
   doc,
@@ -9,6 +9,7 @@ import {
   getDocs,
   query,
   where,
+  limit,
 } from 'firebase/firestore';
 import {
   Sparkles,
@@ -144,6 +145,7 @@ const LOCAL_STORAGE_COMM_FOLLOWS_KEY = 'livroflix_comm_follows_v1';
 const LOCAL_STORAGE_COMM_NOTIFS_KEY = 'livroflix_comm_notifs_v1';
 const LOCAL_STORAGE_BOOK_REVIEWS_KEY = 'livroflix_book_reviews_v1';
 const LEGACY_AUTO_SET = new Set(LEGACY_AUTO_BOOK_IDS);
+const IS_COMMUNITY_ENABLED = false;
 
 function readLocalArray<T>(key: string): T[] {
   try {
@@ -244,13 +246,20 @@ export default function App() {
     Record<string, PublicProfile>
   >({});
   const [communityPosts, setCommunityPosts] = useState<CommunityPost[]>(() =>
-    readLocalArray<CommunityPost>(LOCAL_STORAGE_COMM_POSTS_KEY)
+    IS_COMMUNITY_ENABLED
+      ? readLocalArray<CommunityPost>(LOCAL_STORAGE_COMM_POSTS_KEY)
+      : []
   );
   const [communityLikes, setCommunityLikes] = useState<CommunityLike[]>(() =>
-    readLocalArray<CommunityLike>(LOCAL_STORAGE_COMM_LIKES_KEY)
+    IS_COMMUNITY_ENABLED
+      ? readLocalArray<CommunityLike>(LOCAL_STORAGE_COMM_LIKES_KEY)
+      : []
   );
   const [communityReplies, setCommunityReplies] = useState<CommunityReply[]>(
-    () => readLocalArray<CommunityReply>(LOCAL_STORAGE_COMM_REPLIES_KEY)
+    () =>
+      IS_COMMUNITY_ENABLED
+        ? readLocalArray<CommunityReply>(LOCAL_STORAGE_COMM_REPLIES_KEY)
+        : []
   );
   const [communityFollows, setCommunityFollows] = useState<CommunityFollow[]>(
     () => readLocalArray<CommunityFollow>(LOCAL_STORAGE_COMM_FOLLOWS_KEY)
@@ -286,14 +295,17 @@ export default function App() {
   }, [bookReviews]);
 
   useEffect(() => {
+    if (!IS_COMMUNITY_ENABLED) return;
     writeLocalArray(LOCAL_STORAGE_COMM_POSTS_KEY, communityPosts);
   }, [communityPosts]);
 
   useEffect(() => {
+    if (!IS_COMMUNITY_ENABLED) return;
     writeLocalArray(LOCAL_STORAGE_COMM_LIKES_KEY, communityLikes);
   }, [communityLikes]);
 
   useEffect(() => {
+    if (!IS_COMMUNITY_ENABLED) return;
     writeLocalArray(LOCAL_STORAGE_COMM_REPLIES_KEY, communityReplies);
   }, [communityReplies]);
 
@@ -347,200 +359,314 @@ export default function App() {
     }
   }, [isAdmin, activeUserId]);
 
+  // On-demand public_profiles cache & loader (replaces global public_profiles listener)
+  const loadedPublicProfileUidsRef = useRef<Set<string>>(new Set());
+  const searchedUsernameQueriesRef = useRef<Set<string>>(new Set());
+  const usernameAvailabilityCacheRef = useRef<
+    Map<string, { available: boolean; normalized: string; reason?: string }>
+  >(new Map());
+  const lastSyncedPublicProfileSigRef = useRef<string>('');
+  const lastVerifiedUsernameRef = useRef<string>('');
+
+  const computePublicProfileSignature = useCallback(
+    (p: Partial<UserProfile> | null | undefined): string => {
+      if (!p || !p.uid) return '';
+      const displayName = p.displayName || p.nome || 'Leitor LIVROFLIX';
+      const username = (p.username || '')
+        .replace(/^@+/, '')
+        .trim()
+        .toLowerCase();
+      const photoURL = p.photoURL ?? p.foto ?? '';
+      const bio = p.bio || '';
+      const favs = Array.isArray(p.profileFavoriteBooks)
+        ? p.profileFavoriteBooks.slice(0, 5)
+        : Array.isArray(p.favoriteBooks)
+        ? p.favoriteBooks.slice(0, 5)
+        : [];
+      const unlocked = Array.isArray(p.unlockedBadges)
+        ? p.unlockedBadges.slice(0, 10)
+        : [];
+      const profBadges = Array.isArray(p.profileBadges)
+        ? p.profileBadges.slice(0, 10)
+        : [];
+      const uColor = p.usernameColor || p.profileCustomization?.usernameColor || '';
+      return JSON.stringify({
+        uid: p.uid,
+        displayName,
+        username,
+        photoURL,
+        bio,
+        premium: Boolean(p.premium),
+        uColor,
+        customization: p.profileCustomization || null,
+        favs,
+        unlocked,
+        profBadges,
+      });
+    },
+    []
+  );
+
+  const ensurePublicProfilesLoaded = useCallback(
+    async (uids: (string | null | undefined)[]) => {
+      const knownAdmins = getKnownAdminUids();
+      const missingUids = Array.from(
+        new Set(
+          uids
+            .map((u) => (typeof u === 'string' ? u.trim() : ''))
+            .filter(
+              (u) =>
+                Boolean(u) &&
+                !knownAdmins.has(u) &&
+                !loadedPublicProfileUidsRef.current.has(u)
+            )
+        )
+      );
+      if (missingUids.length === 0) return;
+
+      missingUids.forEach((u) => loadedPublicProfileUidsRef.current.add(u));
+
+      const fetchedEntries: Record<string, PublicProfile> = {};
+      await Promise.all(
+        missingUids.map(async (uid) => {
+          try {
+            const snap = await getDoc(doc(db, 'public_profiles', uid));
+            if (!snap.exists()) return;
+            const data = snap.data() as PublicProfile;
+            const resolvedUid = data.uid || snap.id;
+            if (isAdminIdentity({ ...data, uid: resolvedUid })) {
+              registerKnownAdminUid(resolvedUid);
+              return;
+            }
+            fetchedEntries[resolvedUid] = { ...data, uid: resolvedUid };
+            if (resolvedUid && data.username) {
+              const cleanUname = data.username
+                .replace(/^@+/, '')
+                .trim()
+                .toLowerCase();
+              if (cleanUname) {
+                saveLocalUsernameOwner(cleanUname, resolvedUid);
+              }
+            }
+          } catch {
+            // ignore individual profile fetch error
+          }
+        })
+      );
+
+      if (Object.keys(fetchedEntries).length > 0) {
+        setPublicProfilesMap((prev) => ({
+          ...prev,
+          ...fetchedEntries,
+        }));
+      }
+    },
+    []
+  );
+
+  const handleEnsureSinglePublicProfileLoaded = useCallback(
+    (uid: string) => {
+      if (uid) {
+        void ensurePublicProfilesLoaded([uid]);
+      }
+    },
+    [ensurePublicProfilesLoaded]
+  );
+
+  const handleSearchPublicProfiles = useCallback(
+    async (rawQuery: string) => {
+      const clean = rawQuery.trim().replace(/^@+/, '').toLowerCase();
+      if (clean.length < 2) return;
+      if (searchedUsernameQueriesRef.current.has(clean)) return;
+      searchedUsernameQueriesRef.current.add(clean);
+
+      try {
+        // 1. Direct lookup in /usernames/{clean}
+        const unameSnap = await getDoc(doc(db, 'usernames', clean));
+        if (unameSnap.exists()) {
+          const unameData = unameSnap.data() as { uid?: string };
+          if (unameData?.uid) {
+            await ensurePublicProfilesLoaded([unameData.uid]);
+          }
+        }
+
+        // 2. Bounded prefix query on /public_profiles (max 8 docs)
+        const q = query(
+          collection(db, 'public_profiles'),
+          where('username', '>=', clean),
+          where('username', '<=', clean + '\uf8ff'),
+          limit(8)
+        );
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const nextEntries: Record<string, PublicProfile> = {};
+          snap.forEach((d) => {
+            const data = d.data() as PublicProfile;
+            const uid = data.uid || d.id;
+            loadedPublicProfileUidsRef.current.add(uid);
+            if (isAdminIdentity({ ...data, uid })) {
+              registerKnownAdminUid(uid);
+              return;
+            }
+            nextEntries[uid] = { ...data, uid };
+            if (uid && data.username) {
+              saveLocalUsernameOwner(
+                data.username.replace(/^@+/, '').trim().toLowerCase(),
+                uid
+              );
+            }
+          });
+          if (Object.keys(nextEntries).length > 0) {
+            setPublicProfilesMap((prev) => ({ ...prev, ...nextEntries }));
+          }
+        }
+      } catch {
+        // ignore search errors
+      }
+    },
+    [ensurePublicProfilesLoaded]
+  );
+
   /**
-   * Verifica de forma abrangente se um @username já existe ou está em uso por outro leitor,
-   * consultando memória (publicProfilesMap, registeredUsers, posts/respostas/reviews),
-   * registro local e Firestore (/usernames/{username} e /public_profiles).
+   * Verifica se um @username já existe ou está em uso por outro leitor,
+   * consultando memória, registro local e o documento canônico /usernames/{username} com cache em memória.
    */
-  const checkUsernameAvailability = async (
-    rawUsername: string,
-    excludeUid?: string
-  ): Promise<{ available: boolean; normalized: string; reason?: string }> => {
-    const validation = validateUsernameFormat(rawUsername);
-    if (!validation.valid) {
-      return {
-        available: false,
-        normalized: validation.normalized,
-        reason: validation.error || 'Nome de usuário (@username) inválido.',
-      };
-    }
+  const checkUsernameAvailability = useCallback(
+    async (
+      rawUsername: string,
+      excludeUid?: string
+    ): Promise<{ available: boolean; normalized: string; reason?: string }> => {
+      const validation = validateUsernameFormat(rawUsername);
+      if (!validation.valid) {
+        return {
+          available: false,
+          normalized: validation.normalized,
+          reason: validation.error || 'Nome de usuário (@username) inválido.',
+        };
+      }
 
-    const normalized = validation.normalized;
-    const targetUid = excludeUid ?? firebaseUser?.uid ?? userProfile?.uid ?? '';
+      const normalized = validation.normalized;
+      const targetUid =
+        excludeUid ?? firebaseUser?.uid ?? userProfile?.uid ?? '';
 
-    // 0. Bloquear usernames reservados/administrativos para usuários comuns sem expor a conta admin
-    if (!isAdmin && isReservedAdminUsername(normalized)) {
-      return {
-        available: false,
-        normalized,
-        reason: `O nome de usuário @${normalized} não está disponível.`,
-      };
-    }
-
-    // 1. Verificar em publicProfilesMap (perfis públicos carregados em tempo real)
-    for (const pub of Object.values(publicProfilesMap)) {
-      if (!pub || !pub.uid || pub.uid === targetUid) continue;
-      const pubUsername = (pub.username || '')
+      // Se for o próprio username atual do usuário, está disponível sem leituras no Firestore
+      const myCurrentUsername = (userProfile?.username || '')
         .replace(/^@+/, '')
         .trim()
         .toLowerCase();
-      if (pubUsername && pubUsername === normalized) {
-        if (!isAdminIdentity(pub)) {
-          saveLocalUsernameOwner(normalized, pub.uid);
-        }
+      if (
+        myCurrentUsername &&
+        normalized === myCurrentUsername &&
+        (!excludeUid || excludeUid === userProfile?.uid)
+      ) {
+        return { available: true, normalized };
+      }
+
+      // 0. Bloquear usernames reservados/administrativos para usuários comuns
+      if (!isAdmin && isReservedAdminUsername(normalized)) {
         return {
           available: false,
           normalized,
-          reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
+          reason: `O nome de usuário @${normalized} não está disponível.`,
         };
       }
-    }
 
-    // 2. Verificar em registeredUsers (lista de usuários carregada)
-    for (const u of registeredUsers) {
-      if (!u || !u.uid || u.uid === targetUid) continue;
-      const uName = (u.username || generateDefaultUsername(u))
-        .replace(/^@+/, '')
-        .trim()
-        .toLowerCase();
-      if (uName && uName === normalized) {
-        if (!isAdminIdentity(u)) {
-          saveLocalUsernameOwner(normalized, u.uid);
-        }
-        return {
-          available: false,
-          normalized,
-          reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
-        };
+      const cacheKey = `${normalized}::${targetUid}`;
+      const cachedResult = usernameAvailabilityCacheRef.current.get(cacheKey);
+      if (cachedResult) {
+        return cachedResult;
       }
-    }
 
-    // 3. Verificar em publicações, respostas e reviews da comunidade (caso o autor ainda não esteja em publicProfilesMap)
-    for (const post of communityPosts) {
-      if (!post.authorId || post.authorId === targetUid) continue;
-      const activeAuthorUsername = (
-        publicProfilesMap[post.authorId]?.username ||
-        post.authorUsername ||
-        ''
-      )
-        .replace(/^@+/, '')
-        .trim()
-        .toLowerCase();
-      if (activeAuthorUsername && activeAuthorUsername === normalized) {
-        saveLocalUsernameOwner(normalized, post.authorId);
-        return {
-          available: false,
-          normalized,
-          reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
-        };
-      }
-    }
-
-    for (const reply of communityReplies) {
-      if (!reply.authorId || reply.authorId === targetUid) continue;
-      const activeAuthorUsername = (
-        publicProfilesMap[reply.authorId]?.username ||
-        reply.authorUsername ||
-        ''
-      )
-        .replace(/^@+/, '')
-        .trim()
-        .toLowerCase();
-      if (activeAuthorUsername && activeAuthorUsername === normalized) {
-        saveLocalUsernameOwner(normalized, reply.authorId);
-        return {
-          available: false,
-          normalized,
-          reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
-        };
-      }
-    }
-
-    for (const rev of bookReviews) {
-      if (!rev.userId || rev.userId === targetUid) continue;
-      const activeAuthorUsername = (
-        publicProfilesMap[rev.userId]?.username ||
-        rev.authorUsername ||
-        ''
-      )
-        .replace(/^@+/, '')
-        .trim()
-        .toLowerCase();
-      if (activeAuthorUsername && activeAuthorUsername === normalized) {
-        saveLocalUsernameOwner(normalized, rev.userId);
-        return {
-          available: false,
-          normalized,
-          reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
-        };
-      }
-    }
-
-    // 4. Verificar no registro local (localStorage)
-    const localRegistry = getLocalUsernamesRegistry();
-    if (
-      localRegistry[normalized] &&
-      localRegistry[normalized] !== targetUid
-    ) {
-      return {
-        available: false,
-        normalized,
-        reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
-      };
-    }
-
-    // 5. Verificar no Firestore (/usernames/{normalized})
-    try {
-      const usernameSnap = await getDoc(doc(db, 'usernames', normalized));
-      if (usernameSnap.exists()) {
-        const data = usernameSnap.data() as { uid?: string };
-        if (data?.uid && data.uid !== targetUid) {
-          saveLocalUsernameOwner(normalized, data.uid);
-          return {
+      // 1. Verificar em publicProfilesMap carregados em memória
+      for (const pub of Object.values(publicProfilesMap)) {
+        if (!pub || !pub.uid || pub.uid === targetUid) continue;
+        const pubUsername = (pub.username || '')
+          .replace(/^@+/, '')
+          .trim()
+          .toLowerCase();
+        if (pubUsername && pubUsername === normalized) {
+          if (!isAdminIdentity(pub)) {
+            saveLocalUsernameOwner(normalized, pub.uid);
+          }
+          const res = {
             available: false,
             normalized,
             reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
           };
+          usernameAvailabilityCacheRef.current.set(cacheKey, res);
+          return res;
         }
       }
-    } catch {
-      // Prossegue para verificação em public_profiles caso falhe
-    }
 
-    // 6. Verificar no Firestore (/public_profiles onde username == normalized)
-    try {
-      const [pubSnapClean, pubSnapAt] = await Promise.all([
-        getDocs(
-          query(
-            collection(db, 'public_profiles'),
-            where('username', '==', normalized)
-          )
-        ),
-        getDocs(
-          query(
-            collection(db, 'public_profiles'),
-            where('username', '==', `@${normalized}`)
-          )
-        ),
-      ]);
-      for (const d of [...pubSnapClean.docs, ...pubSnapAt.docs]) {
-        const data = d.data() as PublicProfile;
-        const docUid = data?.uid || d.id;
-        if (docUid && docUid !== targetUid) {
-          saveLocalUsernameOwner(normalized, docUid);
-          return {
+      // 2. Verificar em registeredUsers (se carregado)
+      for (const u of registeredUsers) {
+        if (!u || !u.uid || u.uid === targetUid) continue;
+        const uName = (u.username || generateDefaultUsername(u))
+          .replace(/^@+/, '')
+          .trim()
+          .toLowerCase();
+        if (uName && uName === normalized) {
+          if (!isAdminIdentity(u)) {
+            saveLocalUsernameOwner(normalized, u.uid);
+          }
+          const res = {
             available: false,
             normalized,
             reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
           };
+          usernameAvailabilityCacheRef.current.set(cacheKey, res);
+          return res;
         }
       }
-    } catch {
-      // Prossegue caso offline
-    }
 
-    return { available: true, normalized };
-  };
+      // 3. Verificar no registro local (localStorage)
+      const localRegistry = getLocalUsernamesRegistry();
+      if (
+        localRegistry[normalized] &&
+        localRegistry[normalized] !== targetUid
+      ) {
+        const res = {
+          available: false,
+          normalized,
+          reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
+        };
+        usernameAvailabilityCacheRef.current.set(cacheKey, res);
+        return res;
+      }
+
+      // 4. Verificar no Firestore apenas no documento canônico (/usernames/{normalized})
+      try {
+        const usernameSnap = await getDoc(doc(db, 'usernames', normalized));
+        if (usernameSnap.exists()) {
+          const data = usernameSnap.data() as { uid?: string };
+          if (data?.uid && data.uid !== targetUid) {
+            saveLocalUsernameOwner(normalized, data.uid);
+            const res = {
+              available: false,
+              normalized,
+              reason: `O nome de usuário @${normalized} já está sendo usado por outro leitor.`,
+            };
+            usernameAvailabilityCacheRef.current.set(cacheKey, res);
+            return res;
+          }
+        }
+      } catch {
+        // Prossegue caso offline
+      }
+
+      const finalRes = { available: true, normalized };
+      usernameAvailabilityCacheRef.current.set(cacheKey, finalRes);
+      return finalRes;
+    },
+    [
+      firebaseUser?.uid,
+      userProfile?.uid,
+      userProfile?.username,
+      isAdmin,
+      publicProfilesMap,
+      registeredUsers,
+    ]
+  );
 
   /**
    * Garante que o username padrão gerado no primeiro login nunca colida com um username já existente.
@@ -777,7 +903,14 @@ export default function App() {
             });
             if (updatedProfile.username) {
               saveLocalUsernameOwner(updatedProfile.username, user.uid);
+              lastVerifiedUsernameRef.current = updatedProfile.username
+                .replace(/^@+/, '')
+                .trim()
+                .toLowerCase();
             }
+            lastSyncedPublicProfileSigRef.current =
+              computePublicProfileSignature(updatedProfile);
+            loadedPublicProfileUidsRef.current.add(user.uid);
             saveSessionProfile(updatedProfile);
             setUserProfile(updatedProfile);
             if (existingData.preferenciasLeitor) {
@@ -824,6 +957,7 @@ export default function App() {
             if (newProfile.username) {
               saveLocalUsernameOwner(newProfile.username, user.uid);
             }
+            loadedPublicProfileUidsRef.current.add(user.uid);
             saveSessionProfile(newProfile);
             setUserProfile(newProfile);
             await setDoc(userRef, newProfile, { merge: true });
@@ -849,47 +983,11 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 1b. Real-time sync of current user's profile document (/users/{activeUserId})
-  useEffect(() => {
-    if (!firebaseUser?.uid) return;
-    const uid = firebaseUser.uid;
-    const userRef = doc(db, 'users', uid);
-    const unsubscribe = onSnapshot(
-      userRef,
-      (snap) => {
-        if (!snap.exists()) return;
-        const data = snap.data() as UserProfile;
-        const resolvedName =
-          data.displayName || data.nome || 'Leitor LIVROFLIX';
-        const hasSavedPhoto = 'photoURL' in data || 'foto' in data;
-        const resolvedPhoto = hasSavedPhoto
-          ? (data.photoURL ?? data.foto ?? '')
-          : '';
-        const syncedProfile: UserProfile = stripUndefined({
-          ...data,
-          uid,
-          nome: resolvedName,
-          displayName: resolvedName,
-          foto: resolvedPhoto,
-          photoURL: resolvedPhoto,
-          bio: typeof data.bio === 'string' ? data.bio : '',
-        });
-        saveSessionProfile(syncedProfile);
-        setUserProfile(syncedProfile);
-      },
-      () => {
-        // Ignore snapshot errors if rules are transitioning
-      }
-    );
-    return () => unsubscribe();
-  }, [firebaseUser?.uid]);
-
-  // 2. Sync Global Platform Settings (/settings/platform)
+  // 2. Load Global Platform Settings (/settings/platform) once on startup
   useEffect(() => {
     const settingsRef = doc(db, 'settings', 'platform');
-    const unsubscribe = onSnapshot(
-      settingsRef,
-      (snap) => {
+    getDoc(settingsRef)
+      .then((snap) => {
         if (snap.exists()) {
           const data = snap.data() as Partial<PlatformSettings>;
           setPlatformSettings({
@@ -909,19 +1007,16 @@ export default function App() {
         } else {
           setPlatformSettings(DEFAULT_PLATFORM_SETTINGS);
         }
-      },
-      (error) => {
+      })
+      .catch((error) => {
         handleFirestoreError(error, OperationType.GET, 'settings/platform');
-      }
-    );
-    return () => unsubscribe();
+      });
   }, []);
 
-  // 3. Sync Dynamic Home Rows (/home_rows)
+  // 3. Load Dynamic Home Rows (/home_rows) once on startup
   useEffect(() => {
-    const unsubscribe = onSnapshot(
-      collection(db, 'home_rows'),
-      (snapshot) => {
+    getDocs(collection(db, 'home_rows'))
+      .then((snapshot) => {
         if (snapshot.empty) {
           setHomeRows(DEFAULT_HOME_ROWS);
         } else {
@@ -932,23 +1027,20 @@ export default function App() {
           rows.sort((a, b) => a.ordem - b.ordem);
           setHomeRows(rows);
         }
-      },
-      (error) => {
+      })
+      .catch((error) => {
         handleFirestoreError(error, OperationType.LIST, 'home_rows');
-      }
-    );
-    return () => unsubscribe();
+      });
   }, []);
 
-  // 4. Sync Real Books Catalog from Firestore (/books) — excluding any legacy auto-created book IDs
+  // 4. Load Real Books Catalog from Firestore (/books) once on startup
   useEffect(() => {
     const fallbackTimer = setTimeout(() => {
       setIsCatalogLoading(false);
     }, 3500);
 
-    const unsubscribe = onSnapshot(
-      collection(db, 'books'),
-      (snapshot) => {
+    getDocs(collection(db, 'books'))
+      .then((snapshot) => {
         const realBooks: Book[] = [];
         snapshot.forEach((docSnap) => {
           if (!LEGACY_AUTO_SET.has(docSnap.id)) {
@@ -967,130 +1059,63 @@ export default function App() {
         realBooks.sort((a, b) => (a.ordem || 99) - (b.ordem || 99));
         setBooks(realBooks);
         setIsCatalogLoading(false);
-      },
-      (error) => {
+      })
+      .catch((error) => {
         setIsCatalogLoading(false);
         handleFirestoreError(error, OperationType.LIST, 'books');
-      }
-    );
+      });
+
     return () => {
       clearTimeout(fallbackTimer);
-      unsubscribe();
     };
   }, []);
 
-  // 5. Purge Legacy Auto-Created Books from Firestore (/books) when Admin is authenticated
+  // 5. Ensure Admin stealth in public_profiles without scanning full collections
   useEffect(() => {
     if (!isAdmin || !firebaseUser || cleanupExecutedRef.current) return;
     cleanupExecutedRef.current = true;
-
-    const purgeAutoCreatedBooksAndSeedStructure = async () => {
-      try {
-        // Delete any legacy auto-seeded books from /books in Firestore & backfill missing createdAt
-        const booksSnap = await getDocs(collection(db, 'books'));
-        for (const docSnap of booksSnap.docs) {
-          if (LEGACY_AUTO_SET.has(docSnap.id)) {
-            await deleteDoc(doc(db, 'books', docSnap.id));
-          } else {
-            const data = docSnap.data() as Book;
-            if (!data.createdAt) {
-              const resolvedCreatedAt =
-                resolveBookCreatedAtIso({ ...data, id: data.id || docSnap.id }) ||
-                new Date().toISOString();
-              await setDoc(
-                doc(db, 'books', docSnap.id),
-                { createdAt: resolvedCreatedAt },
-                { merge: true }
-              );
-            }
-          }
-        }
-
-        // Ensure /home_rows structure exists so Admin can manage rows freely
-        const rowsSnap = await getDocs(collection(db, 'home_rows'));
-        if (rowsSnap.empty) {
-          for (const row of DEFAULT_HOME_ROWS) {
-            await setDoc(doc(db, 'home_rows', row.id), stripUndefined(row));
-          }
-        }
-
-        // Purge any public_profiles documents belonging to the Admin so the admin account is never visible to other users
-        const adminUidsToHide = new Set<string>([
-          firebaseUser.uid,
-          'user-malexlkw-gmail-com',
-        ]);
-        registerKnownAdminUid(firebaseUser.uid);
-
-        try {
-          const usersSnap = await getDocs(collection(db, 'users'));
-          usersSnap.forEach((uDoc) => {
-            const uData = uDoc.data() as UserProfile;
-            if (isAdminIdentity({ ...uData, uid: uDoc.id })) {
-              adminUidsToHide.add(uDoc.id);
-              if (uData.uid) adminUidsToHide.add(uData.uid);
-            }
-          });
-        } catch {
-          // ignore
-        }
-
-        try {
-          const pubSnap = await getDocs(collection(db, 'public_profiles'));
-          for (const pDoc of pubSnap.docs) {
-            const pData = pDoc.data() as PublicProfile;
-            if (
-              adminUidsToHide.has(pDoc.id) ||
-              (pData.uid && adminUidsToHide.has(pData.uid)) ||
-              isAdminIdentity({ ...pData, uid: pData.uid || pDoc.id })
-            ) {
-              await deleteDoc(doc(db, 'public_profiles', pDoc.id)).catch(
-                () => {}
-              );
-            }
-          }
-        } catch {
-          // ignore
-        }
-      } catch (error) {
-        console.warn('Cleanup check info:', error);
-      }
-    };
-
-    purgeAutoCreatedBooksAndSeedStructure();
+    registerKnownAdminUid(firebaseUser.uid);
+    deleteDoc(doc(db, 'public_profiles', firebaseUser.uid)).catch(() => {});
+    deleteDoc(doc(db, 'public_profiles', 'user-malexlkw-gmail-com')).catch(
+      () => {}
+    );
   }, [isAdmin, firebaseUser]);
 
-  // 6. Sync Custom Categories from Firestore (/categories)
+  // 6. Load Custom Categories from Firestore (/categories) once on startup
   useEffect(() => {
-    const unsubscribe = onSnapshot(
-      collection(db, 'categories'),
-      (snapshot) => {
+    getDocs(collection(db, 'categories'))
+      .then((snapshot) => {
         const cats: CustomCategory[] = [];
         snapshot.forEach((d) => cats.push(d.data() as CustomCategory));
         cats.sort((a, b) => a.ordem - b.ordem);
         setCustomCategories(cats);
-      },
-      (error) => {
+      })
+      .catch((error) => {
         handleFirestoreError(error, OperationType.LIST, 'categories');
-      }
-    );
-    return () => unsubscribe();
+      });
   }, []);
 
-  // 7. Strictly Isolated Real User Library Subscription (/users/{userId}/library)
-  // Purges any legacy auto-seeded library items and never seeds fake books.
+  // 7. Load User Library once per authenticated session (/users/{userId}/library)
+  const loadedLibraryUidRef = useRef<string | null>(null);
   useEffect(() => {
     const userId = firebaseUser?.uid;
-    if (!userId) return;
-    const libRef = collection(db, 'users', userId, 'library');
+    if (!userId) {
+      loadedLibraryUidRef.current = null;
+      return;
+    }
+    if (loadedLibraryUidRef.current === userId) return;
+    loadedLibraryUidRef.current = userId;
 
-    const unsubscribe = onSnapshot(
-      libRef,
-      (snapshot) => {
+    const libRef = collection(db, 'users', userId, 'library');
+    getDocs(libRef)
+      .then((snapshot) => {
         const loaded: Record<string, UserBookItem> = {};
         snapshot.forEach((docSnap) => {
           const data = docSnap.data() as UserBookItem;
-          if (LEGACY_AUTO_SET.has(docSnap.id) || LEGACY_AUTO_SET.has(data.bookId)) {
-            // Remove legacy superficial library item from Firestore
+          if (
+            LEGACY_AUTO_SET.has(docSnap.id) ||
+            LEGACY_AUTO_SET.has(data.bookId)
+          ) {
             deleteDoc(doc(db, 'users', userId, 'library', docSnap.id)).catch(
               () => {}
             );
@@ -1099,25 +1124,27 @@ export default function App() {
           }
         });
         setUserLibrary(loaded);
-      },
-      (error) => {
+      })
+      .catch((error) => {
         handleFirestoreError(
           error,
           OperationType.LIST,
           `users/${userId}/library`
         );
-      }
-    );
-
-    return () => unsubscribe();
+      });
   }, [firebaseUser?.uid]);
 
-  // 8. Load Registered Users for Admin Panel when user is Admin
+  // 8. Load Registered Users for Admin Panel ONLY when Admin opens the Admin view
+  const adminUsersLoadedRef = useRef<boolean>(false);
   useEffect(() => {
     if (!isAdmin) {
+      adminUsersLoadedRef.current = false;
       setRegisteredUsers([]);
       return;
     }
+    if (activeView !== 'admin' || adminUsersLoadedRef.current) return;
+    adminUsersLoadedRef.current = true;
+
     getDocs(collection(db, 'users'))
       .then((snap) => {
         const list: UserProfile[] = [];
@@ -1131,12 +1158,13 @@ export default function App() {
         setRegisteredUsers(list);
       })
       .catch((error) => {
+        adminUsersLoadedRef.current = false;
         handleFirestoreError(error, OperationType.LIST, 'users');
       });
-  }, [isAdmin, activeUserId, activeView]);
+  }, [isAdmin, activeView]);
 
-  // 9. Sync current user's PublicProfile (/public_profiles/{uid}) so Community cards & @mentions stay up-to-date
-  // Admin account is strictly excluded and purged from /public_profiles so it is never visible to other users.
+  // 9. Sync current user's PublicProfile (/public_profiles/{uid}) ONLY when actual public profile fields change
+  // Never sync simply because updatedAt, reading progress, or minutes read changed.
   useEffect(() => {
     if (!userProfile?.uid) return;
     if (isAdmin || isAdminIdentity(userProfile)) {
@@ -1147,12 +1175,6 @@ export default function App() {
         delete next[userProfile.uid];
         return next;
       });
-      if (firebaseUser && firebaseUser.uid === userProfile.uid) {
-        deleteDoc(doc(db, 'public_profiles', userProfile.uid)).catch(() => {});
-        deleteDoc(doc(db, 'public_profiles', 'user-malexlkw-gmail-com')).catch(
-          () => {}
-        );
-      }
       return;
     }
     const displayName =
@@ -1185,6 +1207,7 @@ export default function App() {
     const resolvedUsernameColor =
       userProfile.usernameColor ||
       userProfile.profileCustomization?.usernameColor;
+    const nowIso = new Date().toISOString();
     const pubProfile: PublicProfile = stripUndefined({
       uid: userProfile.uid,
       displayName,
@@ -1200,23 +1223,34 @@ export default function App() {
       profileFavoriteBooks: resolvedFavIds,
       unlockedBadges: resolvedUnlockedBadges,
       profileBadges: resolvedProfileBadges,
-      updatedAt: userProfile.updatedAt || new Date().toISOString(),
+      updatedAt: userProfile.updatedAt || nowIso,
     });
 
+    loadedPublicProfileUidsRef.current.add(userProfile.uid);
     setPublicProfilesMap((prev) => ({
       ...prev,
       [userProfile.uid]: pubProfile,
     }));
 
+    const currentSig = computePublicProfileSignature(userProfile);
+    if (!currentSig || currentSig === lastSyncedPublicProfileSigRef.current) {
+      return;
+    }
+    lastSyncedPublicProfileSigRef.current = currentSig;
+
     if (firebaseUser && firebaseUser.uid === userProfile.uid) {
       setDoc(
         doc(db, 'public_profiles', userProfile.uid),
-        stripUndefined(pubProfile),
+        stripUndefined({ ...pubProfile, updatedAt: nowIso }),
         { merge: true }
       ).catch(() => {});
 
-      // Também garante que o @username atual do usuário esteja registrado no índice /usernames/{username}
-      if (validateUsernameFormat(username).valid) {
+      // Registra /usernames/{username} somente quando o username realmente mudou ou ainda não foi verificado nesta sessão
+      if (
+        validateUsernameFormat(username).valid &&
+        username !== lastVerifiedUsernameRef.current
+      ) {
+        lastVerifiedUsernameRef.current = username;
         const unameRef = doc(db, 'usernames', username);
         getDoc(unameRef)
           .then((snap) => {
@@ -1224,7 +1258,7 @@ export default function App() {
               return setDoc(unameRef, {
                 uid: userProfile.uid,
                 username,
-                updatedAt: pubProfile.updatedAt,
+                updatedAt: nowIso,
               });
             }
           })
@@ -1247,7 +1281,8 @@ export default function App() {
     userProfile?.profileFavoriteBooks,
     userProfile?.unlockedBadges,
     userProfile?.profileBadges,
-    userProfile?.updatedAt,
+    isAdmin,
+    computePublicProfileSignature,
   ]);
 
   // 9b. Automatically evaluate literary achievements and unlock corresponding badges
@@ -1411,39 +1446,16 @@ export default function App() {
     ).catch(() => {});
   }, [books, userLibrary, userProfile, firebaseUser]);
 
-  // 10. Real-time Subscriptions for Community Collections
+  // 10. Community Subscriptions (strictly disabled when IS_COMMUNITY_ENABLED === false)
   const firebaseUserRef = useRef<User | null>(firebaseUser);
   useEffect(() => {
     firebaseUserRef.current = firebaseUser;
   }, [firebaseUser]);
 
   useEffect(() => {
-    const unsubProfiles = onSnapshot(
-      collection(db, 'public_profiles'),
-      (snap) => {
-        const nextMap: Record<string, PublicProfile> = {};
-        snap.forEach((d) => {
-          const data = d.data() as PublicProfile;
-          const uid = data.uid || d.id;
-          if (isAdminIdentity({ ...data, uid })) {
-            registerKnownAdminUid(uid);
-            return;
-          }
-          nextMap[uid] = { ...data, uid };
-          if (uid && data.username) {
-            const cleanUname = data.username
-              .replace(/^@+/, '')
-              .trim()
-              .toLowerCase();
-            if (cleanUname) {
-              saveLocalUsernameOwner(cleanUname, uid);
-            }
-          }
-        });
-        setPublicProfilesMap(nextMap);
-      },
-      () => {}
-    );
+    if (!IS_COMMUNITY_ENABLED) {
+      return;
+    }
 
     const unsubPosts = onSnapshot(
       collection(db, 'community_posts'),
@@ -1513,7 +1525,11 @@ export default function App() {
         });
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'community_replies');
+        handleFirestoreError(
+          error,
+          OperationType.LIST,
+          'community_replies'
+        );
       }
     );
 
@@ -1539,46 +1555,96 @@ export default function App() {
       }
     );
 
-    const unsubBookReviews = onSnapshot(
-      collection(db, 'book_reviews'),
-      (snap) => {
-        const list: BookReview[] = [];
-        const remoteIds = new Set<string>();
-        snap.forEach((d) => {
-          const data = d.data() as BookReview;
-          const id = data.id || d.id;
-          if (id && data.bookId && data.userId && data.text) {
-            remoteIds.add(id);
-            list.push({ ...data, id });
-          }
-        });
-        setBookReviews((prev) => {
-          const merged = firebaseUserRef.current
-            ? list
-            : [...list, ...prev.filter((r) => !remoteIds.has(r.id))];
-          return merged.sort((a, b) =>
-            (b.createdAt || '').localeCompare(a.createdAt || '')
-          );
-        });
-      },
-      (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'book_reviews');
-      }
-    );
-
     return () => {
-      unsubProfiles();
       unsubPosts();
       unsubLikes();
       unsubReplies();
       unsubFollows();
-      unsubBookReviews();
     };
   }, []);
 
+  // 10b. On-Demand Book Reviews Loader (loads only reviews for the opened book or current user's Minha Lista)
+  const loadedBookReviewsByBookRef = useRef<Set<string>>(new Set());
+  const loadedUserReviewsUidRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (activeView !== 'livro-detalhe' || !selectedBookId) return;
+    if (loadedBookReviewsByBookRef.current.has(selectedBookId)) return;
+    loadedBookReviewsByBookRef.current.add(selectedBookId);
+
+    const q = query(
+      collection(db, 'book_reviews'),
+      where('bookId', '==', selectedBookId)
+    );
+    getDocs(q)
+      .then((snap) => {
+        const fetched: BookReview[] = [];
+        const authorUids: string[] = [];
+        snap.forEach((d) => {
+          const data = d.data() as BookReview;
+          const id = data.id || d.id;
+          if (id && data.bookId && data.userId && data.text) {
+            fetched.push({ ...data, id });
+            authorUids.push(data.userId);
+          }
+        });
+        if (fetched.length > 0) {
+          const fetchedIds = new Set(fetched.map((r) => r.id));
+          setBookReviews((prev) =>
+            [...fetched, ...prev.filter((r) => !fetchedIds.has(r.id))].sort(
+              (a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')
+            )
+          );
+          void ensurePublicProfilesLoaded(authorUids);
+        }
+      })
+      .catch((error) => {
+        loadedBookReviewsByBookRef.current.delete(selectedBookId);
+        handleFirestoreError(error, OperationType.LIST, 'book_reviews');
+      });
+  }, [activeView, selectedBookId, ensurePublicProfilesLoaded]);
+
+  useEffect(() => {
+    if (
+      (activeView !== 'minha-lista' && activeView !== 'continuar-lendo') ||
+      !activeUserId
+    ) {
+      return;
+    }
+    if (loadedUserReviewsUidRef.current === activeUserId) return;
+    loadedUserReviewsUidRef.current = activeUserId;
+
+    const q = query(
+      collection(db, 'book_reviews'),
+      where('userId', '==', activeUserId)
+    );
+    getDocs(q)
+      .then((snap) => {
+        const fetched: BookReview[] = [];
+        snap.forEach((d) => {
+          const data = d.data() as BookReview;
+          const id = data.id || d.id;
+          if (id && data.bookId && data.userId && data.text) {
+            fetched.push({ ...data, id });
+          }
+        });
+        if (fetched.length > 0) {
+          const fetchedIds = new Set(fetched.map((r) => r.id));
+          setBookReviews((prev) =>
+            [...fetched, ...prev.filter((r) => !fetchedIds.has(r.id))].sort(
+              (a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')
+            )
+          );
+        }
+      })
+      .catch(() => {
+        loadedUserReviewsUidRef.current = null;
+      });
+  }, [activeView, activeUserId]);
+
   // 11. Real-time Subscription for Current User's Community Notifications (/community_notifications)
   useEffect(() => {
-    if (!firebaseUser?.uid) {
+    if (!IS_COMMUNITY_ENABLED || !firebaseUser?.uid) {
       setCommunityNotifications([]);
       return;
     }
@@ -1634,7 +1700,7 @@ export default function App() {
 
   // 12. Real-time Subscription for Community Reports (Admin only)
   useEffect(() => {
-    if (!isAdmin || !firebaseUser) {
+    if (!IS_COMMUNITY_ENABLED || !isAdmin || !firebaseUser) {
       setCommunityReports([]);
       return;
     }
@@ -2007,6 +2073,10 @@ export default function App() {
     removeBookFromProfileFavoritesIfPresent(book.id);
   };
 
+  const readingProgressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+
   const handleSaveReadingProgress = (
     book: Book,
     paginaAtual: number,
@@ -2027,7 +2097,7 @@ export default function App() {
     const isFinished = paginaAtual >= effectiveTotalPages;
     const nextMinutes = (current.minutosLidos || 0) + 1;
 
-    saveUserBookItem({
+    const updatedItem: UserBookItem = {
       ...current,
       inMyList: true,
       status: isFinished ? 'concluido' : 'lendo',
@@ -2036,11 +2106,21 @@ export default function App() {
       progresso: isFinished ? 100 : progresso,
       minutosLidos: nextMinutes,
       ultimoAcesso: new Date().toISOString(),
+    };
+
+    // Update local state & localStorage immediately for instant UI responsiveness
+    setUserLibrary((prev) => {
+      const nextLib = { ...prev, [updatedItem.bookId]: updatedItem };
+      try {
+        localStorage.setItem(LOCAL_STORAGE_LIB_KEY, JSON.stringify(nextLib));
+      } catch {
+        // ignore
+      }
+      return nextLib;
     });
 
-    // Update real user reading metrics in profile
+    let updatedProfileForPersist: UserProfile | null = null;
     if (userProfile) {
-      const targetUid = firebaseUser?.uid || userProfile.uid;
       const nextTotalMinutes = (userProfile.totalMinutesRead || 0) + 1;
       const nextStreak = Math.max(1, userProfile.streakDays || 0);
       const isNight = isNightHour(new Date());
@@ -2059,12 +2139,42 @@ export default function App() {
         nightReadingsCount: nextNightReadings,
         updatedAt: new Date().toISOString(),
       });
+      updatedProfileForPersist = updatedProfile;
       saveSessionProfile(updatedProfile);
       setUserProfile(updatedProfile);
-      setDoc(doc(db, 'users', targetUid), updatedProfile, {
-        merge: true,
-      }).catch(() => {});
     }
+
+    // Debounce Firestore persistence (2.5s) so rapid page turns don't trigger excessive writes
+    if (readingProgressTimerRef.current) {
+      clearTimeout(readingProgressTimerRef.current);
+    }
+    readingProgressTimerRef.current = setTimeout(() => {
+      const authedUid = firebaseUser?.uid;
+      if (authedUid) {
+        setDoc(
+          doc(db, 'users', authedUid, 'library', updatedItem.bookId),
+          stripUndefined({
+            ...updatedItem,
+            userId: authedUid,
+          }),
+          { merge: true }
+        ).catch(() => {});
+      }
+      if (updatedProfileForPersist) {
+        const targetUid = firebaseUser?.uid || updatedProfileForPersist.uid;
+        setDoc(
+          doc(db, 'users', targetUid),
+          {
+            uid: targetUid,
+            totalMinutesRead: updatedProfileForPersist.totalMinutesRead,
+            streakDays: updatedProfileForPersist.streakDays,
+            nightReadingsCount: updatedProfileForPersist.nightReadingsCount,
+            updatedAt: updatedProfileForPersist.updatedAt,
+          },
+          { merge: true }
+        ).catch(() => {});
+      }
+    }, 2500);
   };
 
   const handleRateBook = async (
@@ -2648,6 +2758,7 @@ export default function App() {
   };
 
   const handleRefreshCommunityFeed = async (): Promise<void> => {
+    if (!IS_COMMUNITY_ENABLED) return;
     try {
       const snap = await getDocs(collection(db, 'community_posts'));
       const remoteList: CommunityPost[] = [];
@@ -2680,6 +2791,7 @@ export default function App() {
   const handleCreateCommunityPost = async (
     input: CreatePostInput
   ): Promise<void> => {
+    if (!IS_COMMUNITY_ENABLED) return;
     if (!userProfile || !activeUserId) {
       throw new Error('Faça login na sua conta para publicar na Comunidade.');
     }
@@ -2772,6 +2884,7 @@ export default function App() {
   };
 
   const handleDeleteCommunityPost = async (postId: string): Promise<void> => {
+    if (!IS_COMMUNITY_ENABLED) return;
     if (!activeUserId) return;
     const targetPost = communityPosts.find((p) => p.id === postId);
     if (!targetPost) return;
@@ -2796,6 +2909,7 @@ export default function App() {
   const handleToggleCommunityLike = async (
     post: CommunityPost
   ): Promise<void> => {
+    if (!IS_COMMUNITY_ENABLED) return;
     if (!userProfile || !activeUserId) return;
 
     const likeId = `${post.id}_${activeUserId}`;
@@ -2882,6 +2996,7 @@ export default function App() {
   const handleCreateCommunityReply = async (
     input: CreateReplyInput
   ): Promise<void> => {
+    if (!IS_COMMUNITY_ENABLED) return;
     if (!userProfile || !activeUserId) {
       throw new Error('Faça login na sua conta para responder.');
     }
@@ -3044,6 +3159,7 @@ export default function App() {
   };
 
   const handleDeleteCommunityReply = async (replyId: string): Promise<void> => {
+    if (!IS_COMMUNITY_ENABLED) return;
     if (!activeUserId) return;
     const targetReply = communityReplies.find((r) => r.id === replyId);
     if (!targetReply) return;
@@ -3068,6 +3184,7 @@ export default function App() {
   const handleToggleCommunityFollow = async (
     targetUserId: string
   ): Promise<void> => {
+    if (!IS_COMMUNITY_ENABLED) return;
     if (!userProfile || !activeUserId) return;
     if (targetUserId === activeUserId) {
       throw new Error('Você não pode seguir a si mesmo.');
@@ -3154,6 +3271,7 @@ export default function App() {
   };
 
   const handleMarkCommunityNotificationsRead = async (): Promise<void> => {
+    if (!IS_COMMUNITY_ENABLED) return;
     if (!activeUserId) return;
     const unread = communityNotifications.filter(
       (n) => n.recipientId === activeUserId && !n.read
@@ -3180,6 +3298,7 @@ export default function App() {
   const handleMarkSingleNotificationRead = async (
     notificationId: string
   ): Promise<void> => {
+    if (!IS_COMMUNITY_ENABLED) return;
     if (!activeUserId || !notificationId) return;
     const target = communityNotifications.find(
       (n) => n.id === notificationId && n.recipientId === activeUserId
@@ -3202,6 +3321,7 @@ export default function App() {
   const handleSubmitCommunityReport = async (
     input: CreateReportInput
   ): Promise<void> => {
+    if (!IS_COMMUNITY_ENABLED) return;
     if (!userProfile || !activeUserId) {
       throw new Error('Faça login para enviar uma denúncia.');
     }
@@ -3247,6 +3367,7 @@ export default function App() {
     reportId: string,
     status: 'reviewed' | 'dismissed'
   ): Promise<void> => {
+    if (!IS_COMMUNITY_ENABLED) return;
     if (!isAdmin) return;
     setCommunityReports((prev) =>
       prev.map((r) => (r.id === reportId ? { ...r, status } : r))
@@ -3293,6 +3414,7 @@ export default function App() {
   }, [publicProfilesMap, registeredUsers, knownAdminUidsSet]);
 
   const visibleCommunityPosts = useMemo(() => {
+    if (!IS_COMMUNITY_ENABLED) return [];
     if (isAdmin) return communityPosts;
     return communityPosts.filter(
       (p) =>
@@ -3307,6 +3429,7 @@ export default function App() {
   ]);
 
   const visibleCommunityReplies = useMemo(() => {
+    if (!IS_COMMUNITY_ENABLED) return [];
     if (isAdmin) return communityReplies;
     return communityReplies.filter(
       (r) =>
@@ -3321,6 +3444,7 @@ export default function App() {
   ]);
 
   const visibleCommunityLikes = useMemo(() => {
+    if (!IS_COMMUNITY_ENABLED) return [];
     if (isAdmin) return communityLikes;
     return communityLikes.filter(
       (l) =>
@@ -3424,6 +3548,12 @@ export default function App() {
   }, [visibleDirectConversations, activeUserId]);
 
   const handleOpenDirectMessages = (recipientUserId?: string) => {
+    const participantUids: string[] = [];
+    directConversations.forEach((c) => {
+      (c.participants || []).forEach((uid) => {
+        if (uid && uid !== activeUserId) participantUids.push(uid);
+      });
+    });
     if (
       recipientUserId &&
       recipientUserId !== activeUserId &&
@@ -3435,9 +3565,13 @@ export default function App() {
           knownAdminUidsSet
         ))
     ) {
+      participantUids.push(recipientUserId);
       setDmInitialRecipientId(recipientUserId);
     } else {
       setDmInitialRecipientId(null);
+    }
+    if (participantUids.length > 0) {
+      void ensurePublicProfilesLoaded(participantUids);
     }
     setDmModalOpen(true);
   };
@@ -4288,7 +4422,7 @@ export default function App() {
       {/* Main Content View Router */}
       <main className="flex-1">
         {/* VIEW: COMUNIDADE LITERÁRIA */}
-        {activeView === 'comunidade' && (
+        {IS_COMMUNITY_ENABLED && activeView === 'comunidade' && (
           <CommunityView
             books={activeBooks}
             posts={visibleCommunityPosts}
@@ -4477,6 +4611,8 @@ export default function App() {
             onDeletePost={handleDeleteCommunityPost}
             onDeleteReply={handleDeleteCommunityReply}
             onRequireAuth={() => handleNavigate('perfil')}
+            onSearchPublicProfiles={handleSearchPublicProfiles}
+            onEnsurePublicProfileLoaded={handleEnsureSinglePublicProfileLoaded}
           />
         )}
 
@@ -4602,6 +4738,7 @@ export default function App() {
             onDeleteBookReview={handleDeleteBookReview}
             onToggleCommunityFollow={handleToggleCommunityFollow}
             onOpenMessages={handleOpenDirectMessages}
+            onEnsurePublicProfileLoaded={handleEnsureSinglePublicProfileLoaded}
             onSubmitReport={handleSubmitCommunityReport}
             onRequireAuth={() => handleNavigate('perfil')}
             onOpenPremiumModal={() => setVipModalOpen(true)}
@@ -4704,6 +4841,7 @@ export default function App() {
         onToggleFollow={handleToggleCommunityFollow}
         onSelectNotification={(notif) => {
           setNotificationsModalOpen(false);
+          if (!IS_COMMUNITY_ENABLED) return;
           if (notif.postId) {
             setCommunityInitialPostId(notif.postId);
             handleNavigate('comunidade');
@@ -4741,6 +4879,8 @@ export default function App() {
         onClearInitialRecipient={() => setDmInitialRecipientId(null)}
         onToggleFollow={handleToggleCommunityFollow}
         onRequireAuth={() => handleNavigate('perfil')}
+        onSearchPublicProfiles={handleSearchPublicProfiles}
+        onEnsurePublicProfileLoaded={handleEnsureSinglePublicProfileLoaded}
       />
 
       {/* FOOTER */}

@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import {
   doc,
-  onSnapshot,
+  getDoc,
   setDoc,
   deleteDoc,
 } from 'firebase/firestore';
@@ -29,6 +29,7 @@ import { ProfileHighlight } from '../types';
 const MAX_HIGHLIGHT_PHOTOS = 3;
 const MAX_HIGHLIGHT_NAME_LENGTH = 30;
 const HIGHLIGHT_DOC_ID = 'profile';
+const sessionHighlightCache = new Map<string, ProfileHighlight | null>();
 
 function getLocalHighlightCacheKey(userId: string): string {
   return `livroflix_profile_highlight_${userId}`;
@@ -177,15 +178,23 @@ export const ProfileHighlightSection: React.FC<ProfileHighlightSectionProps> = (
       return;
     }
 
+    if (sessionHighlightCache.has(userId)) {
+      const memCached = sessionHighlightCache.get(userId) ?? null;
+      setHighlight(memCached);
+      setLoading(false);
+      return;
+    }
+
     const cached = readCachedHighlight(userId);
     if (cached) {
       setHighlight(cached);
     }
 
+    let cancelled = false;
     const highlightRef = doc(db, 'users', userId, 'highlights', HIGHLIGHT_DOC_ID);
-    const unsubscribe = onSnapshot(
-      highlightRef,
-      (snapshot) => {
+    getDoc(highlightRef)
+      .then((snapshot) => {
+        if (cancelled) return;
         if (snapshot.exists()) {
           const data = snapshot.data() as Partial<ProfileHighlight>;
           const rawPhotos = Array.isArray(data.photos)
@@ -211,24 +220,30 @@ export const ProfileHighlightSection: React.FC<ProfileHighlightSectionProps> = (
                   ? data.updatedAt
                   : new Date().toISOString(),
             };
+            sessionHighlightCache.set(userId, normalized);
             setHighlight(normalized);
             writeCachedHighlight(userId, normalized);
           } else {
+            sessionHighlightCache.set(userId, null);
             setHighlight(null);
             writeCachedHighlight(userId, null);
           }
         } else {
+          sessionHighlightCache.set(userId, null);
           setHighlight(null);
           writeCachedHighlight(userId, null);
         }
         setLoading(false);
-      },
-      () => {
-        setLoading(false);
-      }
-    );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
 
-    return () => unsubscribe();
+    return () => {
+      cancelled = true;
+    };
   }, [userId]);
 
   // Navegação por teclado no visualizador de destaque
@@ -372,6 +387,7 @@ export const ProfileHighlightSection: React.FC<ProfileHighlightSectionProps> = (
         HIGHLIGHT_DOC_ID
       );
       await setDoc(highlightRef, payload);
+      sessionHighlightCache.set(userId, payload);
       setHighlight(payload);
       writeCachedHighlight(userId, payload);
       setIsEditorOpen(false);
@@ -407,6 +423,7 @@ export const ProfileHighlightSection: React.FC<ProfileHighlightSectionProps> = (
         HIGHLIGHT_DOC_ID
       );
       await deleteDoc(highlightRef);
+      sessionHighlightCache.set(userId, null);
       setHighlight(null);
       writeCachedHighlight(userId, null);
       setShowDeleteConfirm(false);

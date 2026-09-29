@@ -66,6 +66,8 @@ interface SearchViewProps {
   onDeleteReply?: (replyId: string) => Promise<void>;
   onRequireAuth?: () => void;
   onOpenMessages?: (targetUserId?: string) => void;
+  onSearchPublicProfiles?: (searchQuery: string) => void;
+  onEnsurePublicProfileLoaded?: (uid: string) => void;
 }
 
 const LEGACY_SUGGESTIONS = new Set([
@@ -96,10 +98,26 @@ export const SearchView: React.FC<SearchViewProps> = ({
   onDeleteReply,
   onRequireAuth,
   onOpenMessages,
+  onSearchPublicProfiles,
+  onEnsurePublicProfileLoaded,
 }) => {
   const [query, setQuery] = useState<string>('');
   const [inspectedUserId, setInspectedUserId] = useState<string | null>(null);
   const [showInspectedUserPosts, setShowInspectedUserPosts] = useState(false);
+
+  const onSearchProfilesRef = React.useRef(onSearchPublicProfiles);
+  React.useEffect(() => {
+    onSearchProfilesRef.current = onSearchPublicProfiles;
+  }, [onSearchPublicProfiles]);
+
+  React.useEffect(() => {
+    const clean = query.trim().replace(/^@+/, '').toLowerCase();
+    if (clean.length < 2 || !onSearchProfilesRef.current) return;
+    const timer = setTimeout(() => {
+      onSearchProfilesRef.current?.(clean);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [query]);
 
   const openInspectedUser = (uid: string | null) => {
     if (
@@ -109,6 +127,9 @@ export const SearchView: React.FC<SearchViewProps> = ({
         isAdminIdentity(publicProfilesMap[uid]))
     ) {
       return;
+    }
+    if (uid) {
+      onEnsurePublicProfileLoaded?.(uid);
     }
     setInspectedUserId(uid);
     setShowInspectedUserPosts(false);

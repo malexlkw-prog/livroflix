@@ -29,7 +29,7 @@ import {
   Play,
   Crown,
 } from 'lucide-react';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, limit, query } from 'firebase/firestore';
 import {
   db,
   uploadBookPdfToBackend,
@@ -92,6 +92,14 @@ interface AdminDashboardProps {
   onSavePlatformSettings: (settings: PlatformSettings) => Promise<void>;
   onUpdateUserProfile: (user: UserProfile) => Promise<void>;
   onDeleteUserProfile: (uid: string) => Promise<void>;
+  hasMoreBooks?: boolean;
+  isLoadingMoreBooks?: boolean;
+  onLoadMoreBooks?: () => void;
+  hasMoreUsers?: boolean;
+  isLoadingMoreUsers?: boolean;
+  onLoadMoreUsers?: () => void;
+  onRequestAdminUsers?: () => void;
+  onEnsureFullBookLoaded?: (bookId: string) => Promise<Book | null>;
 }
 
 const EMPTY_BOOK_FORM: Omit<Book, 'id'> = {
@@ -142,6 +150,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onSavePlatformSettings,
   onUpdateUserProfile,
   onDeleteUserProfile,
+  hasMoreBooks = false,
+  isLoadingMoreBooks = false,
+  onLoadMoreBooks,
+  hasMoreUsers = false,
+  isLoadingMoreUsers = false,
+  onLoadMoreUsers,
+  onRequestAdminUsers,
+  onEnsureFullBookLoaded,
 }) => {
   const [activeTab, setActiveTab] = useState<
     | 'catalogo'
@@ -324,6 +340,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [inspectingUser, setInspectingUser] = useState<UserProfile | null>(null);
   const [inspectedLibrary, setInspectedLibrary] = useState<UserBookItem[]>([]);
   const [loadingHistory, setLoadingHistory] = useState<boolean>(false);
+  const inspectedLibraryCacheRef = useRef<Record<string, UserBookItem[]>>({});
 
   const sortedBooks = [...books].sort((a, b) => (a.ordem || 99) - (b.ordem || 99));
   const filteredCatalogBooks = sortedBooks.filter((b) => {
@@ -460,6 +477,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           ]
     );
     setActiveTab('formulario');
+
+    if (onEnsureFullBookLoaded) {
+      void onEnsureFullBookLoaded(book.id).then((fullBook) => {
+        if (!fullBook) return;
+        setFormState((prev) => ({
+          ...prev,
+          arquivo: fullBook.arquivo || prev.arquivo,
+          ...(fullBook.capitulos ? { capitulos: fullBook.capitulos } : {}),
+        }));
+        if (fullBook.capitulos && fullBook.capitulos.length > 0) {
+          setChaptersList(fullBook.capitulos);
+        }
+      });
+    }
   };
 
   // Seleção do arquivo PDF no input ("Selecionar PDF" ou "Substituir PDF")
@@ -801,14 +832,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Inspect User Library History
   const handleInspectUserHistory = async (u: UserProfile) => {
     setInspectingUser(u);
+    if (inspectedLibraryCacheRef.current[u.uid]) {
+      setInspectedLibrary(inspectedLibraryCacheRef.current[u.uid]);
+      setLoadingHistory(false);
+      return;
+    }
     setLoadingHistory(true);
     try {
-      const snap = await getDocs(collection(db, 'users', u.uid, 'library'));
+      const snap = await getDocs(
+        query(collection(db, 'users', u.uid, 'library'), limit(50))
+      );
       const items: UserBookItem[] = [];
       snap.forEach((d) => items.push(d.data() as UserBookItem));
       items.sort((a, b) =>
         (b.ultimoAcesso || '').localeCompare(a.ultimoAcesso || '')
       );
+      inspectedLibraryCacheRef.current[u.uid] = items;
       setInspectedLibrary(items);
     } catch {
       setInspectedLibrary([]);
@@ -956,7 +995,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => {
+                  setActiveTab(tab.id);
+                  if (tab.id === 'usuarios') {
+                    onRequestAdminUsers?.();
+                  }
+                }}
                 className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                   activeTab === tab.id
                     ? 'bg-[#2563EB] text-white shadow-md'
@@ -1161,6 +1205,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </tbody>
                 </table>
               </div>
+              {hasMoreBooks && onLoadMoreBooks && (
+                <div className="p-4 border-t border-blue-400/15 flex justify-center">
+                  <button
+                    type="button"
+                    disabled={isLoadingMoreBooks}
+                    onClick={onLoadMoreBooks}
+                    className="rounded-xl bg-[#040D1A] hover:bg-blue-950/60 border border-blue-400/25 px-5 py-2.5 text-xs font-semibold text-blue-100 transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    {isLoadingMoreBooks
+                      ? 'Carregando mais livros...'
+                      : 'Carregar mais livros do catálogo'}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -3384,6 +3442,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 ))}
               </div>
+              {hasMoreUsers && onLoadMoreUsers && (
+                <div className="pt-4 flex justify-center">
+                  <button
+                    type="button"
+                    disabled={isLoadingMoreUsers}
+                    onClick={onLoadMoreUsers}
+                    className="rounded-xl bg-[#040D1A] hover:bg-blue-950/60 border border-blue-400/25 px-5 py-2.5 text-xs font-semibold text-blue-100 transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    {isLoadingMoreUsers
+                      ? 'Carregando mais usuários...'
+                      : 'Carregar mais usuários'}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}

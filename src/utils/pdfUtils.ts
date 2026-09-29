@@ -5,6 +5,8 @@ import { canBookBeDownloaded, isUserPremium } from './premiumUtils';
 const LIVROFLIX_PRODUCTION_PDF_STREAM =
   'https://livroflix-api.onrender.com/api/github/pdf-stream';
 
+const pdfBinarySessionCache = new Map<string, Uint8Array>();
+
 export function hasPdfMagicHeader(buffer: ArrayBuffer): boolean {
   if (!buffer || buffer.byteLength < 5) return false;
   const header = new Uint8Array(buffer, 0, 5);
@@ -47,6 +49,12 @@ export async function fetchPdfBinaryData(
   rawUrl: string,
   signal?: AbortSignal
 ): Promise<Uint8Array> {
+  const cacheKey = rawUrl.trim();
+  const cached = pdfBinarySessionCache.get(cacheKey);
+  if (cached) {
+    return cached.slice(0);
+  }
+
   const candidates = buildCandidatePdfUrls(rawUrl);
   let lastError = 'Não foi possível carregar o arquivo PDF.';
 
@@ -72,7 +80,9 @@ export async function fetchPdfBinaryData(
         continue;
       }
 
-      return new Uint8Array(buffer);
+      const bytes = new Uint8Array(buffer);
+      pdfBinarySessionCache.set(cacheKey, bytes);
+      return bytes.slice(0);
     } catch (err) {
       if (
         signal?.aborted ||

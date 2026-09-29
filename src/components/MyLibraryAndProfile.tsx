@@ -2014,7 +2014,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     communityReplies,
   ]);
 
-  // Verificação contínua em tempo real (memória + Firestore) sempre que o usuário digitar um @username
+  const onCheckUsernameRef = useRef(onCheckUsernameAvailability);
+  useEffect(() => {
+    onCheckUsernameRef.current = onCheckUsernameAvailability;
+  }, [onCheckUsernameAvailability]);
+
+  // Verificação sob demanda quando o usuário altera o @username no modal de edição
   useEffect(() => {
     if (!isSettingsOpen && !isEditModalOpen) return;
     if (!liveUsernameValidation.valid || !userProfile?.uid) {
@@ -2024,6 +2029,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
     const candidate = liveUsernameValidation.normalized;
 
+    if (candidate === currentNormalizedUsername) {
+      setUsernameCheckState({ status: 'idle' });
+      return;
+    }
+
     if (isUsernameTakenLocally) {
       setUsernameCheckState({
         status: 'taken',
@@ -2032,12 +2042,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       return;
     }
 
-    if (candidate === currentNormalizedUsername) {
-      setUsernameCheckState({ status: 'idle' });
-      return;
-    }
-
-    if (!onCheckUsernameAvailability) {
+    if (!onCheckUsernameRef.current) {
       setUsernameCheckState({ status: 'available' });
       return;
     }
@@ -2047,10 +2052,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
     const timer = setTimeout(async () => {
       try {
-        const res = await onCheckUsernameAvailability(
-          candidate,
-          userProfile.uid
-        );
+        const checkFn = onCheckUsernameRef.current;
+        if (!checkFn) return;
+        const res = await checkFn(candidate, userProfile.uid);
         if (cancelled) return;
         if (!res.available) {
           setUsernameCheckState({
@@ -2067,7 +2071,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           setUsernameCheckState({ status: 'idle' });
         }
       }
-    }, 220);
+    }, 450);
 
     return () => {
       cancelled = true;
@@ -2082,7 +2086,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     isUsernameTakenLocally,
     currentNormalizedUsername,
     userProfile?.uid,
-    onCheckUsernameAvailability,
   ]);
 
   const isUsernameBlocked =

@@ -149,6 +149,10 @@ interface BookDetailViewProps {
   onRequireAuth?: () => void;
   onOpenPremiumModal?: () => void;
   onOpenMessages?: (targetUserId?: string) => void;
+  onEnsurePublicProfileLoaded?: (uid: string) => void;
+  hasMoreRemoteReviews?: boolean;
+  isLoadingMoreReviews?: boolean;
+  onLoadMoreReviews?: () => void;
   readButtonText?: string;
   ratingPromptText?: string;
   relatedBooksPrefix?: string;
@@ -177,6 +181,10 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
   onRequireAuth,
   onOpenPremiumModal,
   onOpenMessages,
+  onEnsurePublicProfileLoaded,
+  hasMoreRemoteReviews = false,
+  isLoadingMoreReviews = false,
+  onLoadMoreReviews,
   readButtonText = 'LER LIVRO',
   ratingPromptText = 'Avalie esta obra',
   relatedBooksPrefix = 'Se você gostou de',
@@ -211,6 +219,11 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
 
   // Public Profile Inspection & Report Modal States
   const [inspectedUserId, setInspectedUserId] = useState<string | null>(null);
+  useEffect(() => {
+    if (inspectedUserId) {
+      onEnsurePublicProfileLoaded?.(inspectedUserId);
+    }
+  }, [inspectedUserId, onEnsurePublicProfileLoaded]);
   const [reportTarget, setReportTarget] = useState<{
     targetType: 'review' | 'user';
     targetReviewId?: string;
@@ -249,7 +262,8 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
     [currentBookReviews, visibleReviewsCount]
   );
 
-  const hasMoreReviews = currentBookReviews.length > visibleReviewsCount;
+  const hasMoreReviews =
+    currentBookReviews.length > visibleReviewsCount || hasMoreRemoteReviews;
 
   useEffect(() => {
     setVisibleReviewsCount(REVIEWS_PAGE_SIZE);
@@ -1175,13 +1189,30 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
               <div className="pt-2">
                 <button
                   type="button"
-                  onClick={() =>
-                    setVisibleReviewsCount((prev) => prev + REVIEWS_PAGE_SIZE)
-                  }
-                  className="inline-flex items-center gap-2 rounded-xl bg-[#071426] hover:bg-[#0B1E36] border border-blue-400/25 px-5 py-2.5 text-xs sm:text-sm font-semibold text-[#60A5FA] hover:text-white transition-colors cursor-pointer"
+                  disabled={isLoadingMoreReviews}
+                  onClick={() => {
+                    const nextVisible = visibleReviewsCount + REVIEWS_PAGE_SIZE;
+                    setVisibleReviewsCount(nextVisible);
+                    if (
+                      hasMoreRemoteReviews &&
+                      nextVisible >= currentBookReviews.length
+                    ) {
+                      onLoadMoreReviews?.();
+                    }
+                  }}
+                  className="inline-flex items-center gap-2 rounded-xl bg-[#071426] hover:bg-[#0B1E36] border border-blue-400/25 px-5 py-2.5 text-xs sm:text-sm font-semibold text-[#60A5FA] hover:text-white transition-colors cursor-pointer disabled:opacity-60"
                 >
-                  <span>Carregar mais resenhas</span>
-                  <ChevronDown className="w-4 h-4" />
+                  {isLoadingMoreReviews ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Carregando resenhas...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Carregar mais resenhas</span>
+                      <ChevronDown className="w-4 h-4" />
+                    </>
+                  )}
                 </button>
               </div>
             )}

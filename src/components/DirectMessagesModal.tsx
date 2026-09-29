@@ -2,9 +2,16 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   collection,
   doc,
+  getDocs,
+  limit,
   onSnapshot,
+  orderBy,
+  query,
   setDoc,
+  startAfter,
   updateDoc,
+  QueryDocumentSnapshot,
+  DocumentData,
 } from 'firebase/firestore';
 import {
   MessageCircle,
@@ -42,6 +49,8 @@ import {
 } from '../utils/adminStealthUtils';
 
 export const DM_MAX_LENGTH = 1000;
+const DM_MESSAGES_PAGE_SIZE = 35;
+const sessionConversationMessagesCache = new Map<string, DirectMessage[]>();
 
 /**
  * Deterministic conversation ID for any pair of users.
@@ -151,6 +160,8 @@ export interface DirectMessagesModalProps {
   onClearInitialRecipient?: () => void;
   onToggleFollow?: (targetUserId: string) => Promise<void>;
   onRequireAuth?: () => void;
+  onSearchPublicProfiles?: (searchQuery: string) => void;
+  onEnsurePublicProfileLoaded?: (uid: string) => void;
 }
 
 export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
@@ -166,6 +177,8 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
   onClearInitialRecipient,
   onToggleFollow,
   onRequireAuth,
+  onSearchPublicProfiles,
+  onEnsurePublicProfileLoaded,
 }) => {
   const currentUserId =
     auth.currentUser?.uid || currentUserProfile?.uid || '';
@@ -174,13 +187,41 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
     null
   );
   const [searchQuery, setSearchQuery] = useState('');
+
+  const onSearchProfilesRef = useRef(onSearchPublicProfiles);
+  useEffect(() => {
+    onSearchProfilesRef.current = onSearchPublicProfiles;
+  }, [onSearchPublicProfiles]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const clean = searchQuery.trim().replace(/^@+/, '').toLowerCase();
+    if (clean.length < 2 || !onSearchProfilesRef.current) return;
+    const timer = setTimeout(() => {
+      onSearchProfilesRef.current?.(clean);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [isOpen, searchQuery]);
+
+  useEffect(() => {
+    if (isOpen && selectedOtherUserId) {
+      onEnsurePublicProfileLoaded?.(selectedOtherUserId);
+    }
+  }, [isOpen, selectedOtherUserId, onEnsurePublicProfileLoaded]);
   const [messageText, setMessageText] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [messages, setMessages] = useState<DirectMessage[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const [typingCheckTick, setTypingCheckTick] = useState(0);
 
+  const oldestDocCursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(
+    null
+  );
+  const olderMessagesListRef = useRef<DirectMessage[]>([]);
+  const skipAutoScrollBottomRef = useRef<boolean>(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -520,7 +561,7 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
     return Date.now() - ts < 5000;
   }, [otherTypingIso, typingCheckTick]);
 
-  // Real-time listener for messages in the active conversation
+  // Real-time listener for latest messages in the active conversation (bounded by limit)
   useEffect(() => {
     const authedUid = auth.currentUser?.uid;
     if (
@@ -533,21 +574,39 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
     ) {
       setMessages([]);
       setLoadingMessages(false);
+      setHasOlderMessages(false);
+      oldestDocCursorRef.current = null;
+      olderMessagesListRef.current = [];
       return;
     }
 
-    setLoadingMessages(true);
+    oldestDocCursorRef.current = null;
+    olderMessagesListRef.current = [];
+    const cachedMsgs =
+      sessionConversationMessagesCache.get(activeConversationId);
+    if (cachedMsgs && cachedMsgs.length > 0) {
+      setMessages(cachedMsgs);
+      setLoadingMessages(false);
+    } else {
+      setLoadingMessages(true);
+    }
+
     const messagesRef = collection(
       db,
       'conversations',
       activeConversationId,
       'messages'
     );
+    const recentMessagesQuery = query(
+      messagesRef,
+      orderBy('createdAt', 'desc'),
+      limit(DM_MESSAGES_PAGE_SIZE)
+    );
 
     const unsub = onSnapshot(
-      messagesRef,
+      recentMessagesQuery,
       (snap) => {
-        const loaded: DirectMessage[] = [];
+        const latestDocs: DirectMessage[] = [];
         const unreadIncomingDocs: DirectMessage[] = [];
 
         snap.forEach((d) => {
@@ -556,17 +615,31 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
             ...data,
             id: data.id || d.id,
           };
-          loaded.push(msg);
+          latestDocs.push(msg);
 
           if (msg.recipientId === currentUserId && !msg.read) {
             unreadIncomingDocs.push(msg);
           }
         });
 
-        loaded.sort((a, b) =>
+        if (! oldestDocCursorRef.current && snap.docs.length > 0) {
+          oldestDocCursorRef.current = snap.docs[snap.docs.length - 1];
+          setHasOlderMessages(snap.docs.length >= DM_MESSAGES_PAGE_SIZE);
+        }
+
+        const mergedMap = new Map<string, DirectMessage>();
+        olderMessagesListRef.current.forEach((m) => mergedMap.set(m.id, m));
+        latestDocs.forEach((m) => mergedMap.set(m.id, m));
+
+        const mergedSorted = Array.from(mergedMap.values()).sort((a, b) =>
           (a.createdAt || '').localeCompare(b.createdAt || '')
         );
-        setMessages(loaded);
+
+        sessionConversationMessagesCache.set(
+          activeConversationId,
+          mergedSorted
+        );
+        setMessages(mergedSorted);
         setLoadingMessages(false);
 
         // Mark incoming unread messages as read
@@ -596,6 +669,64 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
     currentUserId,
     activeConversationId,
   ]);
+
+  const handleLoadOlderMessages = async () => {
+    if (
+      !activeConversationId ||
+      !oldestDocCursorRef.current ||
+      loadingOlderMessages ||
+      !hasOlderMessages
+    ) {
+      return;
+    }
+
+    setLoadingOlderMessages(true);
+    skipAutoScrollBottomRef.current = true;
+    try {
+      const messagesRef = collection(
+        db,
+        'conversations',
+        activeConversationId,
+        'messages'
+      );
+      const olderQuery = query(
+        messagesRef,
+        orderBy('createdAt', 'desc'),
+        startAfter(oldestDocCursorRef.current),
+        limit(DM_MESSAGES_PAGE_SIZE)
+      );
+      const snap = await getDocs(olderQuery);
+      if (snap.empty) {
+        setHasOlderMessages(false);
+      } else {
+        oldestDocCursorRef.current = snap.docs[snap.docs.length - 1];
+        setHasOlderMessages(snap.docs.length >= DM_MESSAGES_PAGE_SIZE);
+        const olderBatch: DirectMessage[] = [];
+        snap.forEach((d) => {
+          const data = d.data() as DirectMessage;
+          olderBatch.push({ ...data, id: data.id || d.id });
+        });
+        olderMessagesListRef.current = [
+          ...olderMessagesListRef.current,
+          ...olderBatch,
+        ];
+        setMessages((prev) => {
+          const mergedMap = new Map<string, DirectMessage>();
+          olderBatch.forEach((m) => mergedMap.set(m.id, m));
+          prev.forEach((m) => mergedMap.set(m.id, m));
+          const nextList = Array.from(mergedMap.values()).sort((a, b) =>
+            (a.createdAt || '').localeCompare(b.createdAt || '')
+          );
+          sessionConversationMessagesCache.set(activeConversationId, nextList);
+          return nextList;
+        });
+      }
+    } catch {
+      // ignore pagination error
+    } finally {
+      setLoadingOlderMessages(false);
+    }
+  };
 
   // Mark conversation-level unread state as read when opened
   useEffect(() => {
@@ -645,6 +776,10 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
   // Auto-scroll to bottom when messages or typing indicator change
   useEffect(() => {
     if (!isOpen || !selectedOtherUserId) return;
+    if (skipAutoScrollBottomRef.current) {
+      skipAutoScrollBottomRef.current = false;
+      return;
+    }
     const timer = setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, 60);
@@ -1232,7 +1367,18 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
                   </div>
 
                   {/* ÁREA CENTRAL: Mensagens agrupadas com separação por data e horário */}
-                  <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 space-y-4">
+                  <div
+                    className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 space-y-4"
+                    onScroll={(e) => {
+                      if (
+                        e.currentTarget.scrollTop <= 24 &&
+                        hasOlderMessages &&
+                        !loadingOlderMessages
+                      ) {
+                        void handleLoadOlderMessages();
+                      }
+                    }}
+                  >
                     {loadingMessages ? (
                       <div className="flex items-center justify-center py-12 text-xs text-blue-200/70 gap-2">
                         <Loader2 className="w-4 h-4 animate-spin text-[#60A5FA]" />
@@ -1249,6 +1395,25 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
                       </div>
                     ) : (
                       <>
+                        {hasOlderMessages && (
+                          <div className="flex justify-center pb-2">
+                            <button
+                              type="button"
+                              disabled={loadingOlderMessages}
+                              onClick={() => void handleLoadOlderMessages()}
+                              className="inline-flex items-center gap-1.5 rounded-full bg-[#071426] hover:bg-blue-500/15 border border-blue-400/25 px-3.5 py-1 text-[11px] font-semibold text-blue-200 hover:text-white transition-colors cursor-pointer disabled:opacity-60"
+                            >
+                              {loadingOlderMessages ? (
+                                <>
+                                  <Loader2 className="w-3 h-3 animate-spin text-[#60A5FA]" />
+                                  <span>Carregando anteriores...</span>
+                                </>
+                              ) : (
+                                <span>Carregar mensagens anteriores</span>
+                              )}
+                            </button>
+                          </div>
+                        )}
                         {visibleMessages.map((msg, index) => {
                           const isMine = msg.senderId === currentUserId;
                           const isDeleted =
