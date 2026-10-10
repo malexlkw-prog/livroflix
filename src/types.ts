@@ -2,13 +2,48 @@ export type BookStatus = 'ativo' | 'oculto' | 'rascunho';
 
 export type ReadingStatus = 'nenhum' | 'quero_ler' | 'lendo' | 'concluido';
 
-export type ReadingFormat = 'pdf';
+export type ReadingFormat = 'pdf' | 'livroflix';
 
 export interface ReadingFormatOption {
   format: ReadingFormat;
   icon: string;
   title: string;
   subtitle: string;
+}
+
+export type HighlightColor = 'yellow' | 'pink' | 'blue' | 'green' | 'purple';
+
+export interface BookAnnotation {
+  id: string;
+  bookId: string;
+  userId: string;
+  userDisplayName?: string;
+  userUsername?: string;
+  chapterIndex?: number;
+  paragraphIndex: number;
+  selectedText: string;
+  color: HighlightColor;
+  comment?: string;
+  page?: number;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface BookParagraphComment {
+  id: string;
+  bookId: string;
+  chapterIndex?: number;
+  paragraphIndex: number;
+  paragraphSnippet?: string;
+  userId: string;
+  userName: string;
+  userUsername?: string;
+  userPhoto?: string;
+  userColor?: string;
+  text: string;
+  selectedText?: string;
+  page?: number;
+  createdAt: string;
 }
 
 export interface BookChapter {
@@ -158,6 +193,7 @@ export interface UserProfile {
   unlockedBadges?: string[];
   profileBadges?: string[];
   nightReadingsCount?: number;
+  profileViewsEnabled?: boolean;
   updatedAt: string;
 }
 
@@ -271,7 +307,18 @@ export interface PublicProfile {
   profileFavoriteBooks?: string[];
   unlockedBadges?: string[];
   profileBadges?: string[];
+  profileViewsEnabled?: boolean;
   updatedAt: string;
+}
+
+export interface ProfileViewRecord {
+  targetUserId: string;
+  visitorId: string;
+  visitorName: string;
+  visitorUsername: string;
+  visitorPhoto?: string;
+  visitorViewsEnabled?: boolean;
+  visitedAt: string;
 }
 
 export interface CommunityPost {

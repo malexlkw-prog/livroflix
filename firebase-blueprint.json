@@ -86,6 +86,10 @@
           "items": { "type": "string" },
           "description": "Up to 3 catalog book IDs highlighted on the user profile"
         },
+        "profileViewsEnabled": {
+          "type": "boolean",
+          "description": "Optional toggle to enable or disable profile view history"
+        },
         "updatedAt": { "type": "string" }
       },
       "required": ["uid", "nome", "role"]
@@ -372,6 +376,52 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["name", "photos", "coverUrl", "createdAt", "updatedAt"]
+    },
+    "BookAnnotation": {
+      "title": "BookAnnotation",
+      "description": "User highlight or comment on a selected snippet in a book",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "bookId": { "type": "string" },
+        "userId": { "type": "string" },
+        "selectedText": { "type": "string" },
+        "color": { "type": "string", "enum": ["yellow", "pink", "blue", "green", "purple"] },
+        "comment": { "type": "string" },
+        "paragraphIndex": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "bookId", "userId", "selectedText", "color", "paragraphIndex", "createdAt"]
+    },
+    "BookParagraphComment": {
+      "title": "BookParagraphComment",
+      "description": "Public or shared comment on a specific paragraph of a book",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "bookId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "paragraphIndex": { "type": "number" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "bookId", "userId", "userName", "paragraphIndex", "text", "createdAt"]
+    },
+    "ProfileView": {
+      "title": "ProfileView",
+      "description": "Profile visitor record inspired by TikTok, showing who visited a profile in the last 7 days",
+      "type": "object",
+      "properties": {
+        "targetUserId": { "type": "string" },
+        "visitorId": { "type": "string" },
+        "visitorName": { "type": "string", "maxLength": 80 },
+        "visitorUsername": { "type": "string", "maxLength": 30 },
+        "visitorPhoto": { "type": "string" },
+        "visitorViewsEnabled": { "type": "boolean" },
+        "visitedAt": { "type": "string" }
+      },
+      "required": ["targetUserId", "visitorId", "visitorName", "visitorUsername", "visitedAt"]
     }
   },
   "firestore": {
@@ -446,6 +496,18 @@
     "/users/{userId}/highlights/{highlightId}": {
       "schema": { "$ref": "#/entities/ProfileHighlight" },
       "description": "Single active profile highlight per user at /users/{userId}/highlights/profile (up to 3 photos, 1st photo is cover)"
+    },
+    "/users/{userId}/book_annotations/{annotationId}": {
+      "schema": { "$ref": "#/entities/BookAnnotation" },
+      "description": "User highlights and snippet comments for a book"
+    },
+    "/book_paragraph_comments/{commentId}": {
+      "schema": { "$ref": "#/entities/BookParagraphComment" },
+      "description": "Comments on specific paragraphs of a book"
+    },
+    "/users/{userId}/profile_views/{visitorId}": {
+      "schema": { "$ref": "#/entities/ProfileView" },
+      "description": "Records of users who visited the profile within the 7-day retention period. Readable exclusively by profile owner."
     }
   }
 }

@@ -36,6 +36,7 @@ import {
   UserPlus,
   UserCheck,
   UserMinus,
+  Eye,
 } from 'lucide-react';
 import {
   Book,
@@ -67,6 +68,7 @@ import {
 } from '../utils/adminStealthUtils';
 import { CommunityPostCard, CreateReplyInput } from './CommunityView';
 import { ProfileHighlightSection } from './ProfileHighlightSection';
+import { ProfileViewsModal } from './ProfileViewsModal';
 import {
   DEFAULT_PROFILE_CUSTOMIZATION,
   getProfileBackgroundStyle,
@@ -1449,6 +1451,12 @@ interface ProfileViewProps {
   onOpenPremiumModal?: () => void;
   platformSettings?: PlatformSettings;
   highlightGoogleLoginButton?: boolean;
+  onOpenProfileViews?: () => void;
+  profileViewsCount?: number;
+  onToggleProfileViews?: (enabled: boolean) => Promise<void>;
+  onRecordProfileView?: (targetUserId: string) => void;
+  isProfileViewsModalOpen?: boolean;
+  onCloseProfileViewsModal?: () => void;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
@@ -1484,6 +1492,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onOpenPremiumModal,
   platformSettings,
   highlightGoogleLoginButton = false,
+  onOpenProfileViews,
+  profileViewsCount = 0,
+  onToggleProfileViews,
+  onRecordProfileView,
+  isProfileViewsModalOpen = false,
+  onCloseProfileViewsModal,
 }) => {
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -1985,6 +1999,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     }
     onEnsurePublicProfileLoaded?.(uid);
     void onEnsureUserFollowsLoaded?.(uid);
+    onRecordProfileView?.(uid);
     setInspectedUserId(uid);
   };
 
@@ -3426,6 +3441,22 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           onEnsureUserFollowsLoaded={onEnsureUserFollowsLoaded}
           onEnsurePublicProfileLoaded={onEnsurePublicProfileLoaded}
         />
+
+        {/* MODAL: VISUALIZAÇÕES DO PERFIL (Inspirada no TikTok) */}
+        {isProfileViewsModalOpen && (
+          <ProfileViewsModal
+            isOpen={isProfileViewsModalOpen}
+            onClose={() => onCloseProfileViewsModal?.()}
+            currentUserProfile={userProfile}
+            onToggleProfileViews={onToggleProfileViews || (async () => {})}
+            onSelectUser={(uid) => {
+              onCloseProfileViewsModal?.();
+              openInspectedUser(uid);
+            }}
+            publicProfilesMap={publicProfilesMap}
+            onEnsurePublicProfileLoaded={onEnsurePublicProfileLoaded}
+          />
+        )}
 
         {/* MODAL: PERFIL PÚBLICO DE OUTRO LEITOR (Acessado pela lista de Seguidores/Seguindo) */}
         {inspectedProfile && (

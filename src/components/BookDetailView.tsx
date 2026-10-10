@@ -153,6 +153,7 @@ interface BookDetailViewProps {
   onOpenMessages?: (targetUserId?: string) => void;
   onEnsurePublicProfileLoaded?: (uid: string) => void;
   onEnsureUserFollowsLoaded?: (uid: string) => Promise<void> | void;
+  onRecordProfileView?: (targetUserId: string) => void;
   hasMoreRemoteReviews?: boolean;
   isLoadingMoreReviews?: boolean;
   onLoadMoreReviews?: () => void;
@@ -186,6 +187,7 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
   onOpenMessages,
   onEnsurePublicProfileLoaded,
   onEnsureUserFollowsLoaded,
+  onRecordProfileView,
   hasMoreRemoteReviews = false,
   isLoadingMoreReviews = false,
   onLoadMoreReviews,
@@ -237,8 +239,14 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
     if (inspectedUserId) {
       onEnsurePublicProfileLoaded?.(inspectedUserId);
       onEnsureUserFollowsLoaded?.(inspectedUserId);
+      onRecordProfileView?.(inspectedUserId);
     }
-  }, [inspectedUserId, onEnsurePublicProfileLoaded, onEnsureUserFollowsLoaded]);
+  }, [
+    inspectedUserId,
+    onEnsurePublicProfileLoaded,
+    onEnsureUserFollowsLoaded,
+    onRecordProfileView,
+  ]);
   const [reportTarget, setReportTarget] = useState<{
     targetType: 'review' | 'user';
     targetReviewId?: string;

@@ -289,6 +289,9 @@ export default function App() {
   );
   const [scrollToReviewsOnDetail, setScrollToReviewsOnDetail] =
     useState<boolean>(false);
+  const [profileViewsCount, setProfileViewsCount] = useState<number>(0);
+  const [isProfileViewsModalOpen, setIsProfileViewsModalOpen] =
+    useState<boolean>(false);
 
   useEffect(() => {
     writeLocalArray(LOCAL_STORAGE_BOOK_REVIEWS_KEY, bookReviews);
@@ -2823,6 +2826,170 @@ export default function App() {
   };
 
   // ===============================================================
+  // Visualizações do Perfil (Inspirada no TikTok)
+  // ===============================================================
+  const handleToggleProfileViews = async (enabled: boolean): Promise<void> => {
+    if (!userProfile) return;
+    const targetUid = userProfile.uid;
+    const nowIso = new Date().toISOString();
+
+    const updatedProfile: UserProfile = {
+      ...userProfile,
+      profileViewsEnabled: enabled,
+      updatedAt: nowIso,
+    };
+    setUserProfile(updatedProfile);
+    saveSessionProfile(updatedProfile);
+
+    setPublicProfilesMap((prev) => ({
+      ...prev,
+      [targetUid]: {
+        ...(prev[targetUid] || {
+          uid: targetUid,
+          displayName: userProfile.displayName || userProfile.nome,
+          username: userProfile.username || '',
+          updatedAt: nowIso,
+        }),
+        profileViewsEnabled: enabled,
+        updatedAt: nowIso,
+      },
+    }));
+
+    if (firebaseUser) {
+      try {
+        await setDoc(
+          doc(db, 'users', targetUid),
+          {
+            uid: targetUid,
+            profileViewsEnabled: enabled,
+            updatedAt: nowIso,
+          },
+          { merge: true }
+        );
+        await setDoc(
+          doc(db, 'public_profiles', targetUid),
+          {
+            uid: targetUid,
+            profileViewsEnabled: enabled,
+            updatedAt: nowIso,
+          },
+          { merge: true }
+        );
+      } catch (error) {
+        handleFirestoreError(error, OperationType.UPDATE, `users/${targetUid}`);
+        throw new Error('Não foi possível salvar a preferência de privacidade.');
+      }
+    }
+  };
+
+  const handleRecordProfileView = useCallback(
+    async (targetUserId: string): Promise<void> => {
+      if (!targetUserId) return;
+      if (!userProfile || !firebaseUser) return;
+      if (firebaseUser.isAnonymous) return;
+      // O próprio usuário nunca deve ser registrado como visitante do próprio perfil
+      if (userProfile.uid === targetUserId || firebaseUser.uid === targetUserId) {
+        return;
+      }
+      // Se a funcionalidade estiver desativada pelo visitante, não registra visita
+      if (userProfile.profileViewsEnabled !== true) {
+        return;
+      }
+
+      // Intervalo de deduplicação adequado (2 horas por perfil para evitar repetições em poucos segundos)
+      const dedupKey = `lv_pv_${targetUserId}`;
+      try {
+        const lastVisit = localStorage.getItem(dedupKey);
+        if (lastVisit) {
+          const diffMs = Date.now() - Number(lastVisit);
+          if (diffMs < 2 * 60 * 60 * 1000) {
+            return;
+          }
+        }
+      } catch {}
+
+      const nowIso = new Date().toISOString();
+      try {
+        localStorage.setItem(dedupKey, String(Date.now()));
+      } catch {}
+
+      try {
+        const viewRef = doc(
+          db,
+          'users',
+          targetUserId,
+          'profile_views',
+          userProfile.uid
+        );
+        await setDoc(
+          viewRef,
+          {
+            targetUserId,
+            visitorId: userProfile.uid,
+            visitorName: (
+              userProfile.displayName ||
+              userProfile.nome ||
+              'Leitor'
+            ).slice(0, 80),
+            visitorUsername: (userProfile.username || '')
+              .replace(/^@+/, '')
+              .slice(0, 30),
+            visitorPhoto: (
+              userProfile.photoURL ||
+              userProfile.foto ||
+              ''
+            ).slice(0, 750000),
+            visitorViewsEnabled: true,
+            visitedAt: nowIso,
+          },
+          { merge: true }
+        );
+      } catch (err: unknown) {
+        console.warn('Registro de visualização não persistido:', err);
+      }
+    },
+    [userProfile, firebaseUser]
+  );
+
+  // Carrega contagem recente de visualizações do perfil quando o usuário estiver no próprio perfil
+  useEffect(() => {
+    if (
+      activeView !== 'perfil' ||
+      !userProfile?.uid ||
+      userProfile.profileViewsEnabled !== true
+    ) {
+      setProfileViewsCount(0);
+      return;
+    }
+
+    let isMounted = true;
+    const fetchRecentViewsCount = async () => {
+      try {
+        const sevenDaysAgoIso = new Date(
+          Date.now() - 7 * 24 * 60 * 60 * 1000
+        ).toISOString();
+        const q = query(
+          collection(db, 'users', userProfile.uid, 'profile_views'),
+          where('visitedAt', '>=', sevenDaysAgoIso),
+          limit(30)
+        );
+        const snap = await getDocs(q);
+        if (isMounted) {
+          setProfileViewsCount(snap.docs.length);
+        }
+      } catch {
+        // Fallback silencioso
+      }
+    };
+
+    void fetchRecentViewsCount();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activeView, userProfile?.uid, userProfile?.profileViewsEnabled]);
+
+  // ===============================================================
   // Community Handlers (Posts, Likes, Replies, Follows, Notifications, Moderation)
   // ===============================================================
   const resolveUidByUsername = async (
@@ -3920,6 +4087,7 @@ export default function App() {
   /**
    * Ao clicar em [ LER LIVRO ], verifica se o usuário está logado.
    * Caso não esteja logado, redireciona para a tela de login (perfil) com o botão de login brilhando.
+   * Abre a escolha entre Leitor PDF e Leitor LIVROFLIX.
    */
   const openBookReader = (book: Book) => {
     if (!firebaseUser && !userProfile) {
@@ -3929,11 +4097,12 @@ export default function App() {
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
-    handleSelectReadingFormat(book, 'pdf');
+    setSelectedBookId(book.id);
+    setFormatModalBookId(book.id);
   };
 
   /**
-   * Quando o leitor escolhe o formato (ex: format = "pdf") no modal "Como você quer ler?",
+   * Quando o leitor escolhe o formato (ex: format = "pdf" ou "livroflix") no modal "Como você quer ler?",
    * abre a rota/componente correspondente ao formato escolhido (exige login).
    */
   const handleSelectReadingFormat = (book: Book, format: ReadingFormat) => {
@@ -3959,11 +4128,15 @@ export default function App() {
     if (format === 'pdf') {
       setActiveView('leitor-pdf');
       window.scrollTo({ top: 0, behavior: 'smooth' });
+    } else if (format === 'livroflix') {
+      setActiveView('leitor');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
   const handleNavigate = (view: ActiveView) => {
     setHighlightLoginFromRead(false);
+    setIsProfileViewsModalOpen(false);
     const targetView = view === 'comunidade' ? 'perfil' : view;
     setActiveView(targetView);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -4554,7 +4727,7 @@ export default function App() {
     );
   }
 
-  // Full-screen comfortable Reader
+  // Full-screen comfortable Reader (Leitor LIVROFLIX)
   if (
     activeView === 'leitor' &&
     selectedBook &&
@@ -4563,11 +4736,12 @@ export default function App() {
     return (
       <BookReader
         book={selectedBook}
+        userProfile={userProfile}
         userItem={userLibrary[selectedBook.id]}
         preferences={readerPrefs}
         onUpdatePreferences={handleUpdateReaderPrefs}
         onSaveProgress={handleSaveReadingProgress}
-        onClose={() => setActiveView(previousView)}
+        onClose={() => setActiveView(previousView || 'livro-detalhe')}
       />
     );
   }
@@ -4617,6 +4791,9 @@ export default function App() {
         categoriesList={effectiveCategoriesList}
         platformSettings={platformSettings}
         onOpenPremiumModal={() => setVipModalOpen(true)}
+        onOpenProfileViews={() => setIsProfileViewsModalOpen((prev) => !prev)}
+        isProfileViewsOpen={isProfileViewsModalOpen}
+        profileViewsCount={profileViewsCount}
       />
 
       {/* Main Content View Router */}
@@ -4656,6 +4833,7 @@ export default function App() {
             onResolveReport={handleResolveCommunityReport}
             onNavigateProfile={() => handleNavigate('perfil')}
             onRefreshFeed={handleRefreshCommunityFeed}
+            onRecordProfileView={handleRecordProfileView}
           />
         )}
 
@@ -4815,6 +4993,7 @@ export default function App() {
             onLoadRecommendedProfiles={handleLoadRecommendedProfiles}
             onEnsurePublicProfileLoaded={handleEnsureSinglePublicProfileLoaded}
             onEnsureUserFollowsLoaded={ensureUserFollowsLoaded}
+            onRecordProfileView={handleRecordProfileView}
           />
         )}
 
@@ -4915,6 +5094,12 @@ export default function App() {
             onOpenMessages={handleOpenDirectMessages}
             onOpenPremiumModal={() => setVipModalOpen(true)}
             platformSettings={platformSettings}
+            onOpenProfileViews={() => setIsProfileViewsModalOpen(true)}
+            profileViewsCount={profileViewsCount}
+            onToggleProfileViews={handleToggleProfileViews}
+            onRecordProfileView={handleRecordProfileView}
+            isProfileViewsModalOpen={isProfileViewsModalOpen}
+            onCloseProfileViewsModal={() => setIsProfileViewsModalOpen(false)}
           />
         )}
 
@@ -4944,6 +5129,7 @@ export default function App() {
             onOpenMessages={handleOpenDirectMessages}
             onEnsurePublicProfileLoaded={handleEnsureSinglePublicProfileLoaded}
             onEnsureUserFollowsLoaded={ensureUserFollowsLoaded}
+            onRecordProfileView={handleRecordProfileView}
             onSubmitReport={handleSubmitCommunityReport}
             onRequireAuth={() => handleNavigate('perfil')}
             onOpenPremiumModal={() => setVipModalOpen(true)}

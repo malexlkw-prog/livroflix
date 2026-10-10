@@ -7,6 +7,8 @@ import {
   Crown,
   MessageCircle,
   Bell,
+  Eye,
+  X,
 } from 'lucide-react';
 import { ActiveView, PlatformSettings, UserProfile } from '../types';
 import { LivroflixLogo } from './LivroflixLogo';
@@ -29,6 +31,9 @@ interface HeaderProps {
   unreadMessagesCount?: number;
   onOpenNotifications?: () => void;
   onOpenMessages?: () => void;
+  onOpenProfileViews?: () => void;
+  isProfileViewsOpen?: boolean;
+  profileViewsCount?: number;
   categoriesList?: string[];
   platformSettings?: PlatformSettings;
 }
@@ -64,6 +69,9 @@ export const Header: React.FC<HeaderProps> = ({
   unreadMessagesCount = 0,
   onOpenNotifications,
   onOpenMessages,
+  onOpenProfileViews,
+  isProfileViewsOpen = false,
+  profileViewsCount = 0,
   categoriesList = BOOK_CATEGORIES_LIST,
   platformSettings,
 }) => {
@@ -100,8 +108,10 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header
       ref={dropdownRef}
-      className={`fixed top-0 inset-x-0 z-40 transition-all duration-300 ${
-        scrolled || activeView !== 'home' || catDropdownOpen
+      className={`fixed top-0 inset-x-0 ${
+        isProfileViewsOpen ? 'z-[60]' : 'z-40'
+      } transition-all duration-300 ${
+        scrolled || activeView !== 'home' || catDropdownOpen || isProfileViewsOpen
           ? 'bg-[#040D1A]/95 backdrop-blur-xl border-b border-blue-400/15 py-3 shadow-[0_10px_30px_rgba(2,8,23,0.85)]'
           : 'bg-gradient-to-b from-[#040D1A]/95 via-[#040D1A]/65 to-transparent py-3.5 sm:py-4'
       }`}
@@ -240,6 +250,43 @@ export const Header: React.FC<HeaderProps> = ({
                 >
                   <ShieldCheck className="w-4 h-4" />
                   <span>Admin</span>
+                </button>
+              )}
+
+              {/* Bolinha: Visualizações do Perfil (na linha onde estão Início, Minha lista etc., do lado direito) */}
+              {activeView === 'perfil' && userProfile && onOpenProfileViews && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCatDropdownOpen(false);
+                    onOpenProfileViews();
+                  }}
+                  aria-label={
+                    isProfileViewsOpen
+                      ? 'Fechar visualizações do perfil'
+                      : 'Visualizações do perfil'
+                  }
+                  title={
+                    isProfileViewsOpen
+                      ? 'Fechar visualizações do perfil'
+                      : 'Visualizações do perfil'
+                  }
+                  className={`relative flex items-center justify-center h-8 w-8 rounded-full border transition-all cursor-pointer shadow-sm hover:scale-105 active:scale-95 ml-2 ${
+                    isProfileViewsOpen
+                      ? 'bg-blue-600 border-blue-300 text-white shadow-[0_0_15px_rgba(37,99,235,0.7)] ring-2 ring-blue-400/60'
+                      : 'border-blue-400/50 bg-blue-500/20 hover:bg-blue-500/35 text-[#60A5FA] hover:text-white'
+                  }`}
+                >
+                  {isProfileViewsOpen ? (
+                    <X className="w-4 h-4 stroke-[2.5]" />
+                  ) : (
+                    <Eye className="w-4 h-4 stroke-[2.2]" />
+                  )}
+                  {!isProfileViewsOpen && profileViewsCount > 0 && (
+                    <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-blue-500 px-1 text-[10px] font-mono-num font-bold text-white shadow-md">
+                      {profileViewsCount > 99 ? '99+' : profileViewsCount}
+                    </span>
+                  )}
                 </button>
               )}
             </nav>
@@ -456,6 +503,43 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               <span>Comunidade</span>
+            </button>
+          )}
+
+          {/* Bolinha: Visualizações do Perfil (na linha onde estão Início, Minha lista etc., do lado direito) */}
+          {activeView === 'perfil' && userProfile && onOpenProfileViews && (
+            <button
+              type="button"
+              onClick={() => {
+                setCatDropdownOpen(false);
+                onOpenProfileViews();
+              }}
+              aria-label={
+                isProfileViewsOpen
+                  ? 'Fechar visualizações do perfil'
+                  : 'Visualizações do perfil'
+              }
+              title={
+                isProfileViewsOpen
+                  ? 'Fechar visualizações do perfil'
+                  : 'Visualizações do perfil'
+              }
+              className={`ml-auto shrink-0 relative flex h-7.5 w-7.5 items-center justify-center rounded-full border transition-all cursor-pointer shadow-sm active:scale-95 ${
+                isProfileViewsOpen
+                  ? 'bg-blue-600 border-blue-300 text-white shadow-[0_0_15px_rgba(37,99,235,0.7)] ring-2 ring-blue-400/60'
+                  : 'border-blue-400/50 bg-blue-500/20 hover:bg-blue-500/35 text-[#60A5FA] hover:text-white'
+              }`}
+            >
+              {isProfileViewsOpen ? (
+                <X className="w-3.5 h-3.5 stroke-[2.5]" />
+              ) : (
+                <Eye className="w-3.5 h-3.5 stroke-[2.2]" />
+              )}
+              {!isProfileViewsOpen && profileViewsCount > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-4 min-w-[15px] items-center justify-center rounded-full bg-blue-500 px-0.5 text-[9px] font-mono-num font-bold text-white shadow">
+                  {profileViewsCount > 99 ? '99+' : profileViewsCount}
+                </span>
+              )}
             </button>
           )}
         </nav>

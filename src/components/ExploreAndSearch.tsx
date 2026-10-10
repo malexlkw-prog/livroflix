@@ -72,6 +72,7 @@ interface SearchViewProps {
   onLoadRecommendedProfiles?: () => Promise<void> | void;
   onEnsurePublicProfileLoaded?: (uid: string) => void;
   onEnsureUserFollowsLoaded?: (uid: string) => Promise<void> | void;
+  onRecordProfileView?: (targetUserId: string) => void;
 }
 
 const LEGACY_SUGGESTIONS = new Set([
@@ -106,6 +107,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
   onLoadRecommendedProfiles,
   onEnsurePublicProfileLoaded,
   onEnsureUserFollowsLoaded,
+  onRecordProfileView,
 }) => {
   const [query, setQuery] = useState<string>('');
   const [inspectedUserId, setInspectedUserId] = useState<string | null>(null);
@@ -151,6 +153,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
     if (uid) {
       onEnsurePublicProfileLoaded?.(uid);
       void onEnsureUserFollowsLoaded?.(uid);
+      onRecordProfileView?.(uid);
     }
     setInspectedUserId(uid);
     setShowInspectedUserPosts(false);

@@ -9,8 +9,6 @@ import {
   RotateCcw,
   Loader2,
   Trash2,
-  Crown,
-  Lock,
 } from 'lucide-react';
 import {
   ProfileBackgroundConfig,
@@ -20,7 +18,6 @@ import {
   UserProfile,
 } from '../types';
 import {
-  isUserPremium,
   isValidHexColor,
   USERNAME_COLOR_PRESETS,
 } from '../utils/premiumUtils';
@@ -901,7 +898,6 @@ export const ProfileCustomizationModal: React.FC<
 
   if (!isOpen) return null;
 
-  const isPremium = isUserPremium(userProfile);
   const currentBg = draft.background || DEFAULT_PROFILE_CUSTOMIZATION.background!;
   const currentBanner = draft.banner || DEFAULT_PROFILE_CUSTOMIZATION.banner!;
   const currentTheme = draft.theme || 'default';
@@ -911,76 +907,51 @@ export const ProfileCustomizationModal: React.FC<
   const displayUsername = (userProfile.username || 'leitor').replace(/^@+/, '');
   const displayPhoto = userProfile.photoURL ?? userProfile.foto ?? '';
 
-  const requirePremiumOrRun = (
-    needsPremium: boolean | undefined,
-    action: () => void
-  ) => {
-    if (needsPremium && !isPremium) {
-      if (onOpenPremiumModal) {
-        onOpenPremiumModal();
-      } else {
-        setErrorMsg(
-          'Este recurso é exclusivo para assinantes do LIVROFLIX Premium (R$ 11,00/mês).'
-        );
-      }
-      return;
-    }
-    action();
-  };
-
   const handleSelectUsernameColor = (color: string) => {
-    requirePremiumOrRun(color.toUpperCase() !== '#FFFFFF', () => {
-      setErrorMsg(null);
-      if (!isValidHexColor(color)) return;
-      onChangeDraft({
-        ...draft,
-        usernameColor: color.toUpperCase() === '#FFFFFF' ? '' : color,
-      });
+    setErrorMsg(null);
+    if (!isValidHexColor(color)) return;
+    onChangeDraft({
+      ...draft,
+      usernameColor: color.toUpperCase() === '#FFFFFF' ? '' : color,
     });
   };
 
   const handleSelectSolidColor = (preset: SolidColorPreset) => {
-    requirePremiumOrRun(preset.isPremium, () => {
-      setErrorMsg(null);
-      onChangeDraft({
-        ...draft,
-        theme: 'custom',
-        background: {
-          type: preset.id === 'default' ? 'default' : 'solid',
-          value: preset.color,
-          presetId: preset.id,
-        },
-      });
+    setErrorMsg(null);
+    onChangeDraft({
+      ...draft,
+      theme: 'custom',
+      background: {
+        type: preset.id === 'default' ? 'default' : 'solid',
+        value: preset.color,
+        presetId: preset.id,
+      },
     });
   };
 
   const handleSelectGradient = (preset: GradientPreset) => {
-    requirePremiumOrRun(preset.isPremium, () => {
-      setErrorMsg(null);
-      onChangeDraft({
-        ...draft,
-        theme: 'custom',
-        background: {
-          type: 'gradient',
-          value: preset.css,
-          presetId: preset.id,
-        },
-      });
+    setErrorMsg(null);
+    onChangeDraft({
+      ...draft,
+      theme: 'custom',
+      background: {
+        type: 'gradient',
+        value: preset.css,
+        presetId: preset.id,
+      },
     });
   };
 
   const handleSelectThematicBackground = (preset: ImagePreset) => {
-    requirePremiumOrRun(preset.isPremium, () => {
-      setErrorMsg(null);
-      onChangeDraft({
-        ...draft,
-        theme: 'custom',
-        background: {
-          type: 'preset-image',
-          value: preset.url,
-          presetId: preset.id,
-        },
-      });
+    setErrorMsg(null);
+    onChangeDraft({
+      ...draft,
+      theme: 'custom',
+      background: {
+        type: 'preset-image',
+        value: preset.url,
+        presetId: preset.id,
+      },
     });
   };
 
@@ -1028,18 +999,16 @@ export const ProfileCustomizationModal: React.FC<
   };
 
   const handleSelectPresetBanner = (preset: ImagePreset) => {
-    requirePremiumOrRun(preset.isPremium, () => {
-      setErrorMsg(null);
-      onChangeDraft({
-        ...draft,
-        theme: 'custom',
-        banner: {
-          type: 'preset',
-          value: preset.url,
-          presetId: preset.id,
-          positionY: currentBanner.positionY ?? 50,
-        },
-      });
+    setErrorMsg(null);
+    onChangeDraft({
+      ...draft,
+      theme: 'custom',
+      banner: {
+        type: 'preset',
+        value: preset.url,
+        presetId: preset.id,
+        positionY: currentBanner.positionY ?? 50,
+      },
     });
   };
 
@@ -1099,15 +1068,13 @@ export const ProfileCustomizationModal: React.FC<
   };
 
   const handleSelectReadyTheme = (themePreset: ReadyThemePreset) => {
-    requirePremiumOrRun(themePreset.isPremium, () => {
-      setErrorMsg(null);
-      onChangeDraft({
-        ...draft,
-        theme: themePreset.id,
-        background: { ...themePreset.background },
-        banner: { ...themePreset.banner },
-        effects: 'none',
-      });
+    setErrorMsg(null);
+    onChangeDraft({
+      ...draft,
+      theme: themePreset.id,
+      background: { ...themePreset.background },
+      banner: { ...themePreset.banner },
+      effects: 'none',
     });
   };
 
@@ -1206,7 +1173,6 @@ export const ProfileCustomizationModal: React.FC<
                 <p
                   className="font-display text-xl sm:text-2xl font-bold text-white truncate"
                   style={
-                    isPremium &&
                     currentUsernameColor &&
                     currentUsernameColor.toUpperCase() !== '#FFFFFF'
                       ? { color: currentUsernameColor }
@@ -1296,25 +1262,15 @@ export const ProfileCustomizationModal: React.FC<
           {/* TAB 1: FUNDO & COR DO NOME */}
           {activeTab === 'fundo' && (
             <div className="space-y-6">
-              {/* Cor personalizada do Nome de Usuário (@username) — Recurso Premium */}
-              <div className="rounded-xl bg-[#040D1A]/80 border border-amber-400/25 p-4 space-y-3">
+              {/* Cor personalizada do Nome de Usuário (@username) */}
+              <div className="rounded-xl bg-[#040D1A]/80 border border-blue-400/25 p-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    <Crown className="w-4 h-4 text-amber-400" />
+                    <Palette className="w-4 h-4 text-[#60A5FA]" />
                     <h3 className="font-display text-lg font-bold text-white">
                       Cor do Nome de Usuário (@{displayUsername})
                     </h3>
                   </div>
-                  {!isPremium && onOpenPremiumModal && (
-                    <button
-                      type="button"
-                      onClick={onOpenPremiumModal}
-                      className="inline-flex items-center gap-1 rounded-lg bg-amber-400/15 hover:bg-amber-400/25 border border-amber-400/40 px-2.5 py-1 text-xs font-bold text-amber-300 transition-colors cursor-pointer"
-                    >
-                      <Crown className="w-3.5 h-3.5" />
-                      <span>Liberar com Premium</span>
-                    </button>
-                  )}
                 </div>
 
                 <p className="text-xs text-blue-200/75">
@@ -1326,7 +1282,6 @@ export const ProfileCustomizationModal: React.FC<
                     const isSelected =
                       currentUsernameColor.toUpperCase() ===
                       preset.color.toUpperCase();
-                    const locked = !isPremium && preset.id !== 'default';
                     return (
                       <button
                         key={preset.id}
@@ -1343,26 +1298,16 @@ export const ProfileCustomizationModal: React.FC<
                           style={{ backgroundColor: preset.color }}
                         />
                         <span>{preset.label}</span>
-                        {locked && (
-                          <Lock className="w-3 h-3 text-amber-400 shrink-0" />
-                        )}
                       </button>
                     );
                   })}
 
                   {/* Seletor de cor livre */}
                   <label
-                    onClick={(e) => {
-                      if (!isPremium) {
-                        e.preventDefault();
-                        onOpenPremiumModal?.();
-                      }
-                    }}
-                    className="inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold border border-amber-400/35 bg-[#071426] hover:border-amber-400 text-amber-200 cursor-pointer"
+                    className="inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold border border-blue-400/35 bg-[#071426] hover:border-[#60A5FA] text-blue-100 cursor-pointer"
                   >
                     <input
                       type="color"
-                      disabled={!isPremium}
                       value={
                         isValidHexColor(currentUsernameColor)
                           ? currentUsernameColor
@@ -1372,9 +1317,6 @@ export const ProfileCustomizationModal: React.FC<
                       className="h-5 w-5 rounded cursor-pointer bg-transparent border-0"
                     />
                     <span>Seletor de cor</span>
-                    {!isPremium && (
-                      <Lock className="w-3 h-3 text-amber-400 shrink-0" />
-                    )}
                   </label>
                 </div>
               </div>
@@ -1391,7 +1333,6 @@ export const ProfileCustomizationModal: React.FC<
                     (currentBg.type === 'default' && preset.id === 'default') ||
                     (currentBg.type === 'solid' &&
                       currentBg.presetId === preset.id);
-                  const locked = Boolean(preset.isPremium && !isPremium);
                   return (
                     <button
                       key={preset.id}
@@ -1412,24 +1353,16 @@ export const ProfileCustomizationModal: React.FC<
                           {preset.label}
                         </span>
                       </div>
-                      {preset.isPremium && (
-                        <Crown
-                          className={`w-3.5 h-3.5 shrink-0 ${
-                            locked ? 'text-amber-400' : 'text-amber-300/70'
-                          }`}
-                        />
-                      )}
                     </button>
                   );
                 })}
               </div>
 
-              {/* Gradientes Exclusivos Premium */}
+              {/* Gradientes */}
               <div className="pt-2 border-t border-blue-400/15 space-y-3">
                 <div className="flex items-center gap-2">
-                  <Crown className="w-4 h-4 text-amber-400" />
                   <h3 className="font-display text-lg font-bold text-white">
-                    Gradientes Premium
+                    Gradientes
                   </h3>
                 </div>
 
@@ -1438,7 +1371,6 @@ export const ProfileCustomizationModal: React.FC<
                     const isSelected =
                       currentBg.type === 'gradient' &&
                       currentBg.presetId === preset.id;
-                    const locked = Boolean(preset.isPremium && !isPremium);
                     return (
                       <button
                         key={preset.id}
@@ -1459,9 +1391,6 @@ export const ProfileCustomizationModal: React.FC<
                             {preset.label}
                           </span>
                         </div>
-                        {locked && (
-                          <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                        )}
                       </button>
                     );
                   })}
@@ -1481,7 +1410,6 @@ export const ProfileCustomizationModal: React.FC<
                     const isSelected =
                       currentBg.type === 'preset-image' &&
                       currentBg.presetId === preset.id;
-                    const locked = Boolean(preset.isPremium && !isPremium);
                     return (
                       <button
                         key={preset.id}
@@ -1501,12 +1429,6 @@ export const ProfileCustomizationModal: React.FC<
                             referrerPolicy="no-referrer"
                           />
                           <div className="absolute inset-0 bg-black/35" />
-                          {preset.isPremium && (
-                            <span className="absolute top-1.5 right-1.5 inline-flex items-center gap-1 rounded bg-black/75 border border-amber-400/40 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
-                              <Crown className="w-3 h-3" />
-                              {locked ? 'Premium' : ''}
-                            </span>
-                          )}
                         </div>
                         <div className="p-2.5">
                           <p className="text-xs font-bold text-white truncate">
@@ -1602,7 +1524,6 @@ export const ProfileCustomizationModal: React.FC<
                   const isSelected =
                     currentBanner.type === 'preset' &&
                     currentBanner.presetId === preset.id;
-                  const locked = Boolean(preset.isPremium && !isPremium);
                   return (
                     <button
                       key={preset.id}
@@ -1621,12 +1542,6 @@ export const ProfileCustomizationModal: React.FC<
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                           referrerPolicy="no-referrer"
                         />
-                        {preset.isPremium && (
-                          <span className="absolute top-2 right-2 inline-flex items-center gap-1 rounded bg-black/75 border border-amber-400/40 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
-                            <Crown className="w-3 h-3" />
-                            {locked ? 'Premium' : ''}
-                          </span>
-                        )}
                       </div>
                       <div className="p-2.5">
                         <p className="text-xs font-bold text-white truncate">
@@ -1691,7 +1606,6 @@ export const ProfileCustomizationModal: React.FC<
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                 {READY_VISUAL_THEMES.map((theme) => {
                   const isSelected = currentTheme === theme.id;
-                  const locked = Boolean(theme.isPremium && !isPremium);
                   return (
                     <button
                       key={theme.id}
@@ -1724,21 +1638,11 @@ export const ProfileCustomizationModal: React.FC<
                             />
                           )}
                           <div className="absolute inset-0 bg-gradient-to-t from-[#040D1A] via-transparent to-transparent" />
-                          {theme.isPremium && (
-                            <span className="absolute top-2 left-2 inline-flex items-center gap-1 rounded bg-black/80 border border-amber-400/40 px-2 py-0.5 text-[10px] font-bold text-amber-300">
-                              <Crown className="w-3 h-3" />
-                              <span>Premium</span>
-                            </span>
-                          )}
-                          {isSelected ? (
+                          {isSelected && (
                             <span className="absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded-full bg-[#2563EB] text-white shadow">
                               <Check className="w-3.5 h-3.5" />
                             </span>
-                          ) : locked ? (
-                            <span className="absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded-full bg-black/75 text-amber-400 shadow">
-                              <Lock className="w-3.5 h-3.5" />
-                            </span>
-                          ) : null}
+                          )}
                         </div>
 
                         <div className="p-3">

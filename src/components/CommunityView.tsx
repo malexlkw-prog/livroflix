@@ -1118,6 +1118,7 @@ interface CommunityViewProps {
   onClearInitialPostId?: () => void;
   initialInspectUserId?: string | null;
   onClearInitialInspectUserId?: () => void;
+  onRecordProfileView?: (targetUserId: string) => void;
 }
 
 const FEED_PAGE_SIZE = 10;
@@ -1155,6 +1156,7 @@ export const CommunityView: React.FC<CommunityViewProps> = ({
   onClearInitialPostId,
   initialInspectUserId,
   onClearInitialInspectUserId,
+  onRecordProfileView,
 }) => {
   const activeBooks = useMemo(
     () => books.filter((b) => b.status === 'ativo'),
@@ -1240,6 +1242,9 @@ export const CommunityView: React.FC<CommunityViewProps> = ({
       return;
     }
     setInspectedUserId(uid);
+    if (uid) {
+      onRecordProfileView?.(uid);
+    }
     setShowInspectedUserPosts(false);
   };
 

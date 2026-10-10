@@ -113,8 +113,7 @@ export function isValidHexColor(value?: string | null): boolean {
 }
 
 /**
- * Retorna a cor personalizada do @username somente se o usuário possuir assinatura Premium ativa.
- * Quando a assinatura termina, preserva o valor salvo no banco, mas exibe a cor padrão.
+ * Retorna a cor personalizada do @username.
  */
 export function getEffectiveUsernameColor(
   user?:
@@ -123,7 +122,6 @@ export function getEffectiveUsernameColor(
       })
     | null
 ): string | undefined {
-  if (!isUserPremium(user)) return undefined;
   const candidate =
     user?.usernameColor || user?.profileCustomization?.usernameColor;
   if (!candidate || !isValidHexColor(candidate)) return undefined;
@@ -132,51 +130,14 @@ export function getEffectiveUsernameColor(
 }
 
 /**
- * Adapta a exibição da personalização do perfil de acordo com o status Premium atual,
- * sem apagar os dados salvos caso a assinatura termine.
+ * Retorna a personalização do perfil do usuário.
  */
 export function getEffectiveProfileCustomization(
-  user?: Pick<UserProfile | PublicProfile, 'premium'> | null,
+  _user?: Pick<UserProfile | PublicProfile, 'premium'> | null,
   customization?: ProfileCustomization
 ): ProfileCustomization | undefined {
   if (!customization) return undefined;
-  if (isUserPremium(user)) return customization;
-
-  const bg = customization.background;
-  const isBgLocked =
-    bg &&
-    ((bg.type === 'solid' && bg.presetId && PREMIUM_SOLID_BG_IDS.has(bg.presetId)) ||
-      (bg.type === 'gradient' &&
-        (!bg.presetId || PREMIUM_GRADIENT_BG_IDS.has(bg.presetId))) ||
-      (bg.type === 'preset-image' &&
-        bg.presetId &&
-        PREMIUM_THEMATIC_BG_IDS.has(bg.presetId)));
-
-  const banner = customization.banner;
-  const isBannerLocked =
-    banner &&
-    banner.type === 'preset' &&
-    banner.presetId &&
-    PREMIUM_BANNER_IDS.has(banner.presetId);
-
-  const effect = customization.effects;
-  const isEffectLocked = Boolean(effect && PREMIUM_EFFECT_IDS.has(effect));
-
-  const theme = customization.theme;
-  const isThemeLocked = Boolean(theme && PREMIUM_THEME_IDS.has(theme));
-
-  return {
-    ...customization,
-    theme: isThemeLocked ? 'default' : customization.theme,
-    background: isBgLocked
-      ? { type: 'default', value: '#040D1A', presetId: 'default' }
-      : customization.background,
-    banner: isBannerLocked
-      ? { type: 'none', value: '', presetId: 'none', positionY: 50 }
-      : customization.banner,
-    effects: isEffectLocked ? 'none' : customization.effects,
-    usernameColor: undefined,
-  };
+  return customization;
 }
 
 /**

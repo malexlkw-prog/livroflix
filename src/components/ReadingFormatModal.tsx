@@ -12,14 +12,22 @@ export function getAvailableReadingFormats(book: Book): ReadingFormatOption[] {
   const formats: ReadingFormatOption[] = [];
   const pdfUrl = book.readingOptions?.pdf?.url || book.pdfUrl;
 
-  if (pdfUrl && pdfUrl.trim() !== '') {
-    formats.push({
-      format: 'pdf',
-      icon: '📄',
-      title: 'PDF',
-      subtitle: 'Ler no leitor do LIVROFLIX',
-    });
-  }
+  formats.push({
+    format: 'pdf',
+    icon: '📄',
+    title: 'Leitor PDF',
+    subtitle:
+      pdfUrl && pdfUrl.trim() !== ''
+        ? 'Visualização original do PDF com virada de páginas e zoom'
+        : 'Visualização original em páginas de PDF',
+  });
+
+  formats.push({
+    format: 'livroflix',
+    icon: '✨',
+    title: 'Leitor LIVROFLIX',
+    subtitle: 'Experiência imersiva com marca-texto, comentários e temas',
+  });
 
   return formats;
 }
