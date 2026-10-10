@@ -17,6 +17,7 @@ import {
   getDocFromServer,
   Firestore,
 } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 import firebaseConfig from '../firebase-applet-config.json';
 import { BookPdfReadingOption, UserProfile } from './types';
 
@@ -41,6 +42,7 @@ function createFirestoreInstance(): Firestore {
 
 export const db = createFirestoreInstance();
 export const auth = getAuth(app);
+export const storage = getStorage(app);
 
 // Garante persistência local da sessão do Firebase Auth
 setPersistence(auth, browserLocalPersistence).catch(() => {});

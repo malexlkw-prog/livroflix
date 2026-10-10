@@ -103,9 +103,74 @@ function pdfStreamProxyPlugin(): Plugin {
   };
 }
 
+function audioVerificationPlugin(): Plugin {
+  const handleAudioCheck = (
+    req: IncomingMessage,
+    res: ServerResponse,
+    next: () => void
+  ) => {
+    if (!req.url || !req.url.startsWith('/api/conversations/')) {
+      return next();
+    }
+    const match = req.url.match(
+      /^\/api\/conversations\/([^/?]+)\/audio\/([^/?]+)/
+    );
+    if (!match) {
+      return next();
+    }
+
+    const conversationId = match[1];
+    const audioId = match[2];
+    const reqUrl = new URL(req.url, 'http://localhost');
+    const expiresAt = reqUrl.searchParams.get('expiresAt');
+
+    if (expiresAt) {
+      const expiresMs = new Date(expiresAt).getTime();
+      if (!Number.isNaN(expiresMs) && Date.now() >= expiresMs) {
+        res.statusCode = 410;
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.end(
+          JSON.stringify({
+            ok: false,
+            expired: true,
+            error: 'Áudio expirado. Prazo de 20 horas atingido.',
+          })
+        );
+        return;
+      }
+    }
+
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.end(
+      JSON.stringify({
+        ok: true,
+        conversationId,
+        audioId,
+        valid: true,
+      })
+    );
+  };
+
+  return {
+    name: 'livroflix-audio-verification-plugin',
+    configureServer(server) {
+      server.middlewares.use(handleAudioCheck);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(handleAudioCheck);
+    },
+  };
+}
+
 export default defineConfig(() => {
   return {
-    plugins: [react(), tailwindcss(), pdfStreamProxyPlugin()],
+    plugins: [
+      react(),
+      tailwindcss(),
+      pdfStreamProxyPlugin(),
+      audioVerificationPlugin(),
+    ],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

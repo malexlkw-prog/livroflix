@@ -360,7 +360,13 @@
         "createdAt": { "type": "string" },
         "read": { "type": "boolean" },
         "deleted": { "type": "boolean" },
-        "hiddenFor": { "type": "array" }
+        "hiddenFor": { "type": "array" },
+        "type": { "type": "string" },
+        "audioId": { "type": "string" },
+        "audioPath": { "type": "string" },
+        "audioDuration": { "type": "number" },
+        "expiresAt": { "type": "string" },
+        "status": { "type": "string" }
       },
       "required": ["id", "conversationId", "senderId", "recipientId", "text", "createdAt", "read"]
     },

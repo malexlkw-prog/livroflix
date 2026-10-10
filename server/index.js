@@ -566,6 +566,68 @@ app.get('/api/premium/download-book', async (req, res) => {
   }
 });
 
+// Endpoint de segurança e verificação de áudios privados (20 horas)
+app.get('/api/conversations/:conversationId/audio/:audioId', async (req, res) => {
+  try {
+    const { conversationId, audioId } = req.params;
+    const authHeader = String(req.headers.authorization || '').trim();
+    const tokenFromQuery = String(req.query.token || '').trim();
+    const bearerToken = authHeader.toLowerCase().startsWith('bearer ')
+      ? authHeader.slice(7).trim()
+      : tokenFromQuery;
+
+    if (!bearerToken) {
+      return res.status(401).json({
+        ok: false,
+        error: 'Não autorizado. Token de autenticação ausente.',
+      });
+    }
+
+    const tokenPayload = await verifyFirebaseIdToken(bearerToken);
+    if (!tokenPayload || !tokenPayload.sub) {
+      return res.status(401).json({
+        ok: false,
+        error: 'Não autorizado. Token inválido ou expirado.',
+      });
+    }
+
+    const requestingUid = tokenPayload.sub;
+    const participants = String(conversationId || '').split('__');
+    if (!participants.includes(requestingUid)) {
+      return res.status(403).json({
+        ok: false,
+        error: 'Acesso negado. Você não é participante desta conversa.',
+      });
+    }
+
+    // Validação estrita do prazo de 20 horas
+    const expiresAtQuery = String(req.query.expiresAt || '').trim();
+    if (expiresAtQuery) {
+      const expiresMs = new Date(expiresAtQuery).getTime();
+      if (!Number.isNaN(expiresMs) && Date.now() >= expiresMs) {
+        return res.status(410).json({
+          ok: false,
+          expired: true,
+          error: 'Áudio expirado. O prazo de 20 horas foi atingido.',
+        });
+      }
+    }
+
+    return res.status(200).json({
+      ok: true,
+      audioId,
+      conversationId,
+      participantVerified: true,
+      valid: true,
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Erro interno ao validar áudio.',
+    });
+  }
+});
+
 app.get('/api/github/pdf-stream', async (req, res) => {
   try {
     const targetUrl = String(req.query.url || '').trim();

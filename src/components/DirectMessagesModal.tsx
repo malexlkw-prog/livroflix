@@ -23,14 +23,23 @@ import {
   UserPlus,
   Crown,
   Loader2,
+  Mic,
+  Square,
+  Play,
+  Pause,
+  AlertCircle,
+  Volume2,
 } from 'lucide-react';
+import { ref, uploadBytes, deleteObject } from 'firebase/storage';
 import {
   db,
   auth,
+  storage,
   stripUndefined,
   handleFirestoreError,
   OperationType,
 } from '../firebase';
+import { AudioMessagePlayer } from './AudioMessagePlayer';
 import {
   CommunityFollow,
   DirectConversation,
@@ -216,6 +225,21 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const [typingCheckTick, setTypingCheckTick] = useState(0);
+
+  // Estados da gravação de áudio temporário (20h)
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
+  const [recordedBlobUrl, setRecordedBlobUrl] = useState<string | null>(null);
+  const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
+  const [isSendingAudio, setIsSendingAudio] = useState(false);
+  const [micError, setMicError] = useState<string | null>(null);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const oldestDocCursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(
     null
@@ -934,6 +958,290 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
     }
   };
 
+  // Cancela gravação ao trocar de conversa ou fechar modal
+  useEffect(() => {
+    handleCancelRecording();
+  }, [selectedOtherUserId, isOpen]);
+
+  const handleStartRecording = async () => {
+    setMicError(null);
+    setSendError(null);
+
+    if (
+      typeof navigator === 'undefined' ||
+      !navigator.mediaDevices ||
+      !navigator.mediaDevices.getUserMedia
+    ) {
+      setMicError('Seu navegador não suporta gravação de áudio.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+
+      let mimeType = 'audio/webm;codecs=opus';
+      if (typeof MediaRecorder !== 'undefined') {
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          if (MediaRecorder.isTypeSupported('audio/webm')) {
+            mimeType = 'audio/webm';
+          } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+            mimeType = 'audio/mp4';
+          } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+            mimeType = 'audio/ogg';
+          } else {
+            mimeType = '';
+          }
+        }
+      }
+
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const finalMime = recorder.mimeType || mimeType || 'audio/webm';
+        const blob = new Blob(audioChunksRef.current, { type: finalMime });
+        if (blob.size > 0) {
+          setRecordedBlob(blob);
+          const url = URL.createObjectURL(blob);
+          setRecordedBlobUrl(url);
+        }
+        stream.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+      };
+
+      recorder.start(250);
+      setIsRecording(true);
+      setRecordingDuration(0);
+
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingDuration((prev) => {
+          if (prev >= 300) {
+            handleStopRecording();
+            return prev;
+          }
+          return prev + 1;
+        });
+      }, 1000);
+    } catch (err) {
+      const error = err as Error;
+      if (
+        error.name === 'NotAllowedError' ||
+        error.name === 'PermissionDeniedError'
+      ) {
+        setMicError('Permissão para uso do microfone foi negada.');
+      } else {
+        setMicError('Não foi possível iniciar a gravação de áudio.');
+      }
+    }
+  };
+
+  const handleStopRecording = () => {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== 'inactive'
+    ) {
+      mediaRecorderRef.current.stop();
+    }
+    setIsRecording(false);
+  };
+
+  const handleCancelRecording = () => {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== 'inactive'
+    ) {
+      mediaRecorderRef.current.stop();
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+    if (recordedBlobUrl) {
+      URL.revokeObjectURL(recordedBlobUrl);
+    }
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+    setIsRecording(false);
+    setRecordingDuration(0);
+    setRecordedBlob(null);
+    setRecordedBlobUrl(null);
+    setIsPreviewPlaying(false);
+    setMicError(null);
+  };
+
+  const handleTogglePreviewPlay = () => {
+    if (!recordedBlobUrl) return;
+
+    if (!previewAudioRef.current) {
+      const audio = new Audio(recordedBlobUrl);
+      previewAudioRef.current = audio;
+      audio.onended = () => {
+        setIsPreviewPlaying(false);
+      };
+      audio.onerror = () => {
+        setIsPreviewPlaying(false);
+      };
+    }
+
+    if (isPreviewPlaying) {
+      previewAudioRef.current.pause();
+      setIsPreviewPlaying(false);
+    } else {
+      previewAudioRef.current
+        .play()
+        .then(() => setIsPreviewPlaying(true))
+        .catch(() => setIsPreviewPlaying(false));
+    }
+  };
+
+  const handleSendRecordedAudio = async () => {
+    if (
+      !currentUserId ||
+      !activeConversationId ||
+      !selectedOtherUserId ||
+      !recordedBlob ||
+      isSendingAudio
+    ) {
+      return;
+    }
+
+    setIsSendingAudio(true);
+    setSendError(null);
+
+    const nowIso = new Date().toISOString();
+    const expiresAtIso = new Date(
+      Date.now() + 20 * 60 * 60 * 1000
+    ).toISOString(); // Exatamente 20 horas
+    const audioId = `aud_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const messageId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    const audioPath = `conversations/${activeConversationId}/audios/${audioId}.webm`;
+
+    try {
+      // 1. Upload seguro do áudio no Firebase Storage
+      const audioRef = ref(storage, audioPath);
+      await uploadBytes(audioRef, recordedBlob, {
+        contentType: recordedBlob.type || 'audio/webm',
+        customMetadata: {
+          conversationId: activeConversationId,
+          senderId: currentUserId,
+          expiresAt: expiresAtIso,
+        },
+      });
+
+      // 2. Atualização dos metadados da conversa no Firestore
+      const activeConversation = conversations.find(
+        (c) => c.id === activeConversationId
+      );
+      const otherProfile = resolveParticipantProfile(
+        selectedOtherUserId,
+        activeConversation
+      );
+      const myProfile = currentUserProfile;
+
+      const conversationPayload = stripUndefined({
+        id: activeConversationId,
+        participants: [currentUserId, selectedOtherUserId].sort(),
+        lastMessage: 'Mensagem de voz (Áudio)',
+        lastMessageAt: nowIso,
+        lastSenderId: currentUserId,
+        unreadBy: [selectedOtherUserId],
+        unreadCounts: {
+          ...(activeConversation?.unreadCounts || {}),
+          [selectedOtherUserId]:
+            Number(
+              activeConversation?.unreadCounts?.[selectedOtherUserId] || 0
+            ) + 1,
+          [currentUserId]: 0,
+        },
+        participantProfiles: {
+          ...(activeConversation?.participantProfiles || {}),
+          ...(myProfile?.uid
+            ? {
+                [myProfile.uid]: {
+                  displayName: myProfile.displayName || myProfile.username,
+                  username: myProfile.username,
+                  photoURL: myProfile.photoURL || '',
+                },
+              }
+            : {}),
+          ...(otherProfile?.uid
+            ? {
+                [otherProfile.uid]: {
+                  displayName:
+                    otherProfile.displayName || otherProfile.username,
+                  username: otherProfile.username,
+                  photoURL: otherProfile.photoURL || '',
+                },
+              }
+            : {}),
+        },
+        createdAt: activeConversation?.createdAt || nowIso,
+        updatedAt: nowIso,
+      });
+
+      // 3. Documento da mensagem com metadados mínimos
+      const newMessage: DirectMessage = {
+        id: messageId,
+        conversationId: activeConversationId,
+        senderId: currentUserId,
+        recipientId: selectedOtherUserId,
+        type: 'audio',
+        text: 'Mensagem de voz',
+        audioId,
+        audioPath,
+        audioDuration: Math.max(1, Math.round(recordingDuration)),
+        createdAt: nowIso,
+        expiresAt: expiresAtIso,
+        status: 'active',
+        read: false,
+      };
+
+      await setDoc(
+        doc(db, 'conversations', activeConversationId),
+        conversationPayload,
+        { merge: true }
+      );
+
+      await setDoc(
+        doc(db, 'conversations', activeConversationId, 'messages', messageId),
+        newMessage
+      );
+
+      handleCancelRecording();
+    } catch (error) {
+      setSendError('Erro ao enviar o áudio. Tente novamente.');
+      handleFirestoreError(
+        error,
+        OperationType.WRITE,
+        `conversations/${activeConversationId}/messages`
+      );
+    } finally {
+      setIsSendingAudio(false);
+    }
+  };
+
   // Allow sender to delete their own message (replaces content with "Mensagem apagada" for both users)
   const handleDeleteOwnMessage = async (msg: DirectMessage) => {
     if (
@@ -947,11 +1255,23 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
     }
 
     try {
+      // Se for áudio, apaga fisicamente o arquivo do Firebase Storage
+      if (msg.type === 'audio' && msg.audioPath) {
+        try {
+          const audioRef = ref(storage, msg.audioPath);
+          deleteObject(audioRef).catch(() => {});
+        } catch {
+          // ignore
+        }
+      }
+
       await updateDoc(
         doc(db, 'conversations', activeConversationId, 'messages', msg.id),
         {
           text: 'Mensagem apagada',
           deleted: true,
+          status: 'expired',
+          audioPath: '',
         }
       );
 
@@ -1198,10 +1518,15 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
                                 }`}
                               >
                                 {conv.lastMessage ? (
-                                  <>
+                                  <span className="inline-flex items-center gap-1 truncate">
                                     {isLastFromMe ? 'Você: ' : ''}
-                                    {conv.lastMessage}
-                                  </>
+                                    {conv.lastMessage.includes('Áudio') && (
+                                      <Mic className="w-3 h-3 text-[#60A5FA] shrink-0" />
+                                    )}
+                                    <span className="truncate">
+                                      {conv.lastMessage}
+                                    </span>
+                                  </span>
                                 ) : (
                                   'Inicie a conversa...'
                                 )}
@@ -1454,19 +1779,26 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
                                 )}
 
                                 <div
-                                  className={`max-w-[82%] sm:max-w-[70%] rounded-2xl px-4 py-2.5 shadow-md ${
+                                  className={`max-w-[85%] sm:max-w-[75%] rounded-2xl px-4 py-2.5 shadow-md ${
                                     isMine
                                       ? 'bg-[#2563EB] text-white rounded-br-sm'
                                       : 'bg-[#071426] border border-blue-400/20 text-blue-50 rounded-bl-sm'
                                   }`}
                                 >
-                                  <p
-                                    className={`text-sm leading-relaxed whitespace-pre-line break-words ${
-                                      isDeleted ? 'italic opacity-75' : ''
-                                    }`}
-                                  >
-                                    {isDeleted ? 'Mensagem apagada' : msg.text}
-                                  </p>
+                                  {isDeleted ? (
+                                    <p className="text-sm leading-relaxed whitespace-pre-line break-words italic opacity-75">
+                                      Mensagem apagada
+                                    </p>
+                                  ) : msg.type === 'audio' ? (
+                                    <AudioMessagePlayer
+                                      message={msg}
+                                      isMine={isMine}
+                                    />
+                                  ) : (
+                                    <p className="text-sm leading-relaxed whitespace-pre-line break-words">
+                                      {msg.text}
+                                    </p>
+                                  )}
                                   <div
                                     className={`mt-1 flex items-center justify-end gap-1.5 text-[10px] font-mono-num ${
                                       isMine
@@ -1501,7 +1833,7 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
                     <div ref={messagesEndRef} />
                   </div>
 
-                  {/* PARTE INFERIOR: "Escreva uma mensagem..." + "Enviar" */}
+                  {/* PARTE INFERIOR: Gravação de áudio temporário ou envio de texto */}
                   <div className="p-3.5 sm:px-6 sm:py-4 border-t border-blue-400/15 bg-[#071426]/95 shrink-0">
                     {sendError && (
                       <div className="mb-2.5 rounded-xl bg-rose-500/10 border border-rose-400/30 px-3 py-2 text-xs text-rose-200 flex items-center justify-between gap-2">
@@ -1509,6 +1841,22 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
                         <button
                           type="button"
                           onClick={() => setSendError(null)}
+                          className="text-rose-300 hover:text-white cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+
+                    {micError && (
+                      <div className="mb-2.5 rounded-xl bg-rose-500/10 border border-rose-400/30 px-3 py-2 text-xs text-rose-200 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                          <span>{micError}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setMicError(null)}
                           className="text-rose-300 hover:text-white cursor-pointer"
                         >
                           <X className="w-3.5 h-3.5" />
@@ -1538,10 +1886,118 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
                           </button>
                         )}
                       </div>
+                    ) : isRecording ? (
+                      /* Modo Gravando Áudio */
+                      <div className="flex items-center justify-between gap-3 rounded-xl bg-[#040D1A] border border-rose-500/40 px-4 py-2.5">
+                        <div className="flex items-center gap-2.5">
+                          <span className="relative flex h-3 w-3">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-3 w-3 bg-rose-500" />
+                          </span>
+                          <span className="text-xs sm:text-sm font-semibold text-rose-200">
+                            Gravando áudio
+                          </span>
+                          <span className="font-mono-num text-xs sm:text-sm font-bold text-white">
+                            {Math.floor(recordingDuration / 60)}:
+                            {String(recordingDuration % 60).padStart(2, '0')}
+                          </span>
+                          <span className="text-[10px] text-blue-200/60 hidden sm:inline">
+                            (Expira em 20h)
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={handleCancelRecording}
+                            title="Cancelar gravação"
+                            aria-label="Cancelar gravação"
+                            className="inline-flex items-center gap-1 rounded-xl bg-[#071426] hover:bg-rose-500/15 border border-rose-500/30 px-3 py-1.5 text-xs font-semibold text-rose-300 hover:text-rose-100 transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span className="hidden sm:inline">Cancelar</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={handleStopRecording}
+                            title="Parar e ouvir prévia"
+                            aria-label="Parar e ouvir prévia"
+                            className="inline-flex items-center gap-1 rounded-xl bg-blue-500/20 hover:bg-blue-500/30 border border-blue-400/30 px-3 py-1.5 text-xs font-semibold text-blue-100 transition-colors cursor-pointer"
+                          >
+                            <Square className="w-3.5 h-3.5" />
+                            <span>Prévia</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : recordedBlob ? (
+                      /* Modo Prévia do Áudio gravado antes de enviar */
+                      <div className="flex items-center justify-between gap-3 rounded-xl bg-[#040D1A] border border-blue-400/30 px-4 py-2.5">
+                        <div className="flex items-center gap-2.5">
+                          <button
+                            type="button"
+                            onClick={handleTogglePreviewPlay}
+                            aria-label={
+                              isPreviewPlaying ? 'Pausar prévia' : 'Ouvir prévia'
+                            }
+                            className="flex h-8 w-8 items-center justify-center rounded-full bg-[#2563EB] hover:bg-[#3B82F6] text-white shadow cursor-pointer"
+                          >
+                            {isPreviewPlaying ? (
+                              <Pause className="w-3.5 h-3.5 fill-current" />
+                            ) : (
+                              <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+                            )}
+                          </button>
+
+                          <div className="flex flex-col">
+                            <span className="text-xs font-semibold text-white">
+                              Prévia da mensagem de voz
+                            </span>
+                            <span className="text-[11px] font-mono-num text-blue-200/70">
+                              {Math.floor(recordingDuration / 60)}:
+                              {String(recordingDuration % 60).padStart(2, '0')}{' '}
+                              • Expira em 20h após envio
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={handleCancelRecording}
+                            disabled={isSendingAudio}
+                            title="Descartar áudio"
+                            aria-label="Descartar áudio"
+                            className="rounded-xl p-2 text-blue-300 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer disabled:opacity-50"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => void handleSendRecordedAudio()}
+                            disabled={isSendingAudio}
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-50 px-4 py-2 text-xs font-bold text-white shadow-lg transition-all cursor-pointer"
+                          >
+                            {isSendingAudio ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                <span>Enviando...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Send className="w-3.5 h-3.5" />
+                                <span>Enviar áudio</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
                     ) : (
+                      /* Modo Normal: Campo de texto + Botão Microfone ou Enviar */
                       <form
                         onSubmit={handleSendMessage}
-                        className="flex items-center gap-2.5"
+                        className="flex items-center gap-2"
                       >
                         <input
                           ref={inputRef}
@@ -1549,24 +2005,35 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
                           maxLength={DM_MAX_LENGTH}
                           value={messageText}
                           onChange={handleMessageInputChange}
-                          placeholder="Escreva uma mensagem..."
+                          placeholder="Escreva uma mensagem ou grave um áudio..."
                           className="flex-1 rounded-xl bg-[#040D1A] border border-blue-400/25 px-4 py-3 text-sm text-white placeholder-blue-300/45 focus:border-[#60A5FA] focus:outline-none transition-colors"
                         />
 
-                        <button
-                          type="submit"
-                          disabled={
-                            isSending || messageText.trim().length === 0
-                          }
-                          className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-45 disabled:cursor-not-allowed px-5 py-3 text-xs sm:text-sm font-bold text-white shadow-lg transition-all cursor-pointer shrink-0"
-                        >
-                          {isSending ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <Send className="w-4 h-4" />
-                          )}
-                          <span>Enviar</span>
-                        </button>
+                        {messageText.trim().length === 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => void handleStartRecording()}
+                            title="Gravar mensagem de voz (20 horas)"
+                            aria-label="Gravar áudio"
+                            className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-blue-500/15 hover:bg-blue-500/25 border border-blue-400/30 px-3.5 py-3 text-xs sm:text-sm font-semibold text-blue-100 hover:text-white transition-all cursor-pointer shrink-0"
+                          >
+                            <Mic className="w-4 h-4 text-[#60A5FA]" />
+                            <span className="hidden sm:inline">Áudio</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="submit"
+                            disabled={isSending}
+                            className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#2563EB] hover:bg-[#3B82F6] disabled:opacity-45 disabled:cursor-not-allowed px-5 py-3 text-xs sm:text-sm font-bold text-white shadow-lg transition-all cursor-pointer shrink-0"
+                          >
+                            {isSending ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Send className="w-4 h-4" />
+                            )}
+                            <span>Enviar</span>
+                          </button>
+                        )}
                       </form>
                     )}
                   </div>

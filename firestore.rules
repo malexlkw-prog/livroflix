@@ -650,7 +650,13 @@ service cloud.firestore {
           request.resource.data.createdAt.size() <= 64 &&
           request.resource.data.read is bool &&
           (!('deleted' in request.resource.data) || request.resource.data.deleted is bool) &&
-          (!('hiddenFor' in request.resource.data) || (request.resource.data.hiddenFor is list && request.resource.data.hiddenFor.size() <= 2));
+          (!('hiddenFor' in request.resource.data) || (request.resource.data.hiddenFor is list && request.resource.data.hiddenFor.size() <= 2)) &&
+          (!('type' in request.resource.data) || (request.resource.data.type is string && request.resource.data.type in ['text', 'audio'])) &&
+          (!('audioId' in request.resource.data) || (request.resource.data.audioId is string && request.resource.data.audioId.size() <= 128)) &&
+          (!('audioPath' in request.resource.data) || (request.resource.data.audioPath is string && request.resource.data.audioPath.size() <= 256)) &&
+          (!('audioDuration' in request.resource.data) || (request.resource.data.audioDuration is number && request.resource.data.audioDuration >= 0 && request.resource.data.audioDuration <= 600)) &&
+          (!('expiresAt' in request.resource.data) || (request.resource.data.expiresAt is string && request.resource.data.expiresAt.size() <= 64)) &&
+          (!('status' in request.resource.data) || (request.resource.data.status is string && request.resource.data.status in ['active', 'expired']));
         allow update: if isConversationParticipant(conversationId) &&
           request.resource.data.senderId == resource.data.senderId &&
           request.resource.data.recipientId == resource.data.recipientId &&
@@ -661,6 +667,12 @@ service cloud.firestore {
               request.resource.data.text == resource.data.text &&
               request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']) &&
               request.resource.data.read is bool
+            ) ||
+            // Participant marking expired audio message as "Áudio expirado"
+            (
+              request.resource.data.text == 'Áudio expirado' &&
+              request.resource.data.status == 'expired' &&
+              request.resource.data.diff(resource.data).affectedKeys().hasAny(['text', 'status', 'audioPath'])
             ) ||
             // Sender deleting their own message for both users ("Mensagem apagada")
             (

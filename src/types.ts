@@ -442,6 +442,12 @@ export interface DirectMessage {
   read: boolean;
   deleted?: boolean;
   hiddenFor?: string[];
+  type?: 'text' | 'audio';
+  audioId?: string;
+  audioPath?: string;
+  audioDuration?: number;
+  expiresAt?: string;
+  status?: 'active' | 'expired';
 }
 
 export type ActiveView =
