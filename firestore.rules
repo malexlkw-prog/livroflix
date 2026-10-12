@@ -692,6 +692,20 @@ service cloud.firestore {
           );
         allow delete: if false;
       }
+
+      match /audios/{audioId} {
+        allow get, list: if isConversationParticipant(conversationId);
+        allow create: if isConversationParticipant(conversationId) &&
+          request.resource.data.id is string &&
+          request.resource.data.conversationId == conversationId &&
+          request.resource.data.senderId == request.auth.uid &&
+          request.resource.data.data is string &&
+          request.resource.data.data.size() <= 950000 &&
+          request.resource.data.createdAt is string &&
+          request.resource.data.expiresAt is string;
+        allow update: if false;
+        allow delete: if isConversationParticipant(conversationId);
+      }
     }
 
     match /{path=**}/library/{bookId} {

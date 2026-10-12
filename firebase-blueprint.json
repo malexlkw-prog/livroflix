@@ -370,6 +370,22 @@
       },
       "required": ["id", "conversationId", "senderId", "recipientId", "text", "createdAt", "read"]
     },
+    "DirectAudio": {
+      "title": "DirectAudio",
+      "description": "Private temporary audio data within a conversation subcollection",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "conversationId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "data": { "type": "string" },
+        "mimeType": { "type": "string" },
+        "size": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "expiresAt": { "type": "string" }
+      },
+      "required": ["id", "conversationId", "senderId", "data", "createdAt", "expiresAt"]
+    },
     "ProfileHighlight": {
       "title": "ProfileHighlight",
       "description": "Single active Instagram-style highlight on a user profile (maximum 1 highlight per user, up to 3 photos, 1st photo is coverUrl)",
@@ -494,6 +510,10 @@
     "/conversations/{conversationId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/DirectMessage" },
       "description": "Private text messages within a conversation accessible exclusively to its two participants"
+    },
+    "/conversations/{conversationId}/audios/{audioId}": {
+      "schema": { "$ref": "#/entities/DirectAudio" },
+      "description": "Private temporary audio data within a conversation accessible exclusively to its two participants"
     },
     "/users/{userId}/library/{bookId}": {
       "schema": { "$ref": "#/entities/UserBookItem" },

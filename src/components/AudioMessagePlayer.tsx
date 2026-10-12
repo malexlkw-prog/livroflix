@@ -9,7 +9,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { ref, getBlob, deleteObject } from 'firebase/storage';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import { db, storage } from '../firebase';
 import { DirectMessage } from '../types';
 
@@ -123,8 +123,24 @@ export const AudioMessagePlayer: React.FC<AudioMessagePlayerProps> = ({
         if (!cleaningUpRef.current && message.audioPath) {
           cleaningUpRef.current = true;
           try {
-            const storageRef = ref(storage, message.audioPath);
-            deleteObject(storageRef).catch(() => {});
+            if (message.audioPath.startsWith('firestore:') || message.audioId) {
+              const audioId = message.audioId || message.audioPath.split('/').pop() || '';
+              if (audioId) {
+                deleteDoc(
+                  doc(
+                    db,
+                    'conversations',
+                    message.conversationId,
+                    'audios',
+                    audioId
+                  )
+                ).catch(() => {});
+              }
+            }
+            if (!message.audioPath.startsWith('firestore:')) {
+              const storageRef = ref(storage, message.audioPath);
+              deleteObject(storageRef).catch(() => {});
+            }
           } catch {
             // ignore
           }
@@ -205,9 +221,38 @@ export const AudioMessagePlayer: React.FC<AudioMessagePlayerProps> = ({
 
     setIsLoadingAudio(true);
     try {
-      const storageRef = ref(storage, message.audioPath);
-      // Download bytes safely as memory Blob using current user's authenticated session
-      const blob = await getBlob(storageRef, 10 * 1024 * 1024);
+      let blob: Blob;
+
+      if (message.audioPath.startsWith('firestore:')) {
+        const audioId =
+          message.audioId || message.audioPath.split('/').pop() || '';
+        const audioDocRef = doc(
+          db,
+          'conversations',
+          message.conversationId,
+          'audios',
+          audioId
+        );
+        const audioSnap = await getDoc(audioDocRef);
+        if (!audioSnap.exists()) {
+          setIsExpired(true);
+          setIsLoadingAudio(false);
+          return;
+        }
+        const data = audioSnap.data();
+        const base64 = data?.data || '';
+        const mimeType = data?.mimeType || 'audio/webm';
+        const byteCharacters = atob(base64);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        blob = new Blob([byteArray], { type: mimeType });
+      } else {
+        const storageRef = ref(storage, message.audioPath);
+        blob = await getBlob(storageRef, 10 * 1024 * 1024);
+      }
 
       // Verify expiration again
       if (

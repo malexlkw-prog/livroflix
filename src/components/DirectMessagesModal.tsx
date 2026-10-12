@@ -10,6 +10,7 @@ import {
   setDoc,
   startAfter,
   updateDoc,
+  deleteDoc,
   QueryDocumentSnapshot,
   DocumentData,
 } from 'firebase/firestore';
@@ -1136,19 +1137,57 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
     ).toISOString(); // Exatamente 20 horas
     const audioId = `aud_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const messageId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-    const audioPath = `conversations/${activeConversationId}/audios/${audioId}.webm`;
+    const standardStoragePath = `conversations/${activeConversationId}/audios/${audioId}.webm`;
+    let finalAudioPath = standardStoragePath;
 
     try {
-      // 1. Upload seguro do áudio no Firebase Storage
-      const audioRef = ref(storage, audioPath);
-      await uploadBytes(audioRef, recordedBlob, {
-        contentType: recordedBlob.type || 'audio/webm',
-        customMetadata: {
+      // 1. Tenta envio seguro para o Firebase Storage com timeout estrito de 2.5s (evita carregamento infinito se o bucket não estiver ativado)
+      try {
+        const audioRef = ref(storage, standardStoragePath);
+        const uploadTask = uploadBytes(audioRef, recordedBlob, {
+          contentType: recordedBlob.type || 'audio/webm',
+          customMetadata: {
+            conversationId: activeConversationId,
+            senderId: currentUserId,
+            expiresAt: expiresAtIso,
+          },
+        });
+        const timeoutTask = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('STORAGE_TIMEOUT')), 2500)
+        );
+        await Promise.race([uploadTask, timeoutTask]);
+      } catch {
+        // Fallback seguro: armazena temporariamente na subcoleção privada da conversa no Firestore
+        const base64Data = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const res = (reader.result as string) || '';
+            resolve(res.split(',')[1] || res);
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(recordedBlob);
+        });
+
+        const audioDocRef = doc(
+          db,
+          'conversations',
+          activeConversationId,
+          'audios',
+          audioId
+        );
+        await setDoc(audioDocRef, {
+          id: audioId,
           conversationId: activeConversationId,
           senderId: currentUserId,
+          data: base64Data,
+          mimeType: recordedBlob.type || 'audio/webm',
+          size: recordedBlob.size,
+          createdAt: nowIso,
           expiresAt: expiresAtIso,
-        },
-      });
+        });
+
+        finalAudioPath = `firestore:conversations/${activeConversationId}/audios/${audioId}`;
+      }
 
       // 2. Atualização dos metadados da conversa no Firestore
       const activeConversation = conversations.find(
@@ -1210,7 +1249,7 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
         type: 'audio',
         text: 'Mensagem de voz',
         audioId,
-        audioPath,
+        audioPath: finalAudioPath,
         audioDuration: Math.max(1, Math.round(recordingDuration)),
         createdAt: nowIso,
         expiresAt: expiresAtIso,
@@ -1255,13 +1294,25 @@ export const DirectMessagesModal: React.FC<DirectMessagesModalProps> = ({
     }
 
     try {
-      // Se for áudio, apaga fisicamente o arquivo do Firebase Storage
-      if (msg.type === 'audio' && msg.audioPath) {
-        try {
-          const audioRef = ref(storage, msg.audioPath);
-          deleteObject(audioRef).catch(() => {});
-        } catch {
-          // ignore
+      // Se for áudio, apaga fisicamente o arquivo (do Storage ou do subdocumento privado do Firestore)
+      if (msg.type === 'audio') {
+        const audioId = msg.audioId || msg.audioPath?.split('/').pop() || '';
+        if (msg.audioPath?.startsWith('firestore:') || audioId) {
+          try {
+            deleteDoc(
+              doc(db, 'conversations', activeConversationId, 'audios', audioId)
+            ).catch(() => {});
+          } catch {
+            // ignore
+          }
+        }
+        if (msg.audioPath && !msg.audioPath.startsWith('firestore:')) {
+          try {
+            const audioRef = ref(storage, msg.audioPath);
+            deleteObject(audioRef).catch(() => {});
+          } catch {
+            // ignore
+          }
         }
       }
 
